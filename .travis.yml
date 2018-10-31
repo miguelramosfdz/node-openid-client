@@ -1,16 +1,13 @@
 language: node_js
 node_js:
-  - lts/boron
   - lts/carbon
   - lts/dubnium
   - stable
 script: npm run coverage
-after_script:
-  - npm install codecov
-  - ./node_modules/.bin/codecov
+after_script: npx codecov
 jobs:
   include:
     - stage: Lint
       script: npm run lint
-      node_js: lts/carbon
+      node_js: stable
       after_script: skip

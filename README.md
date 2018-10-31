@@ -2,12 +2,8 @@
 
 [![build][travis-image]][travis-url] [![codecov][codecov-image]][codecov-url]
 
-openid-client is a server side [OpenID][openid-connect] Relying Party (RP, Client) implementation for
-Node.js, supports [passport][passport-url].
-
-Notice: openid-client ^2.0.x drops support for Node.js versions less than lts/boron(6.9.0) due to
-Node.js lts/argon end of life on [2018-04-30](https://github.com/nodejs/Release). See the
-[CHANGELOG](/CHANGELOG.md) for a complete list of deprecations and changes.
+openid-client is an [OpenID][openid-connect] Relying Party (RP, Client) implementation for
+any javascript environment, supports [passport][passport-url].
 
 **Table of Contents**
 
@@ -34,7 +30,6 @@ openid-client.
   - Unpacking Aggregated Claims
   - Offline Access / Refresh Token Grant
   - Client Credentials Grant
-  - Password Grant
   - Client Authentication
     - none
     - client_secret_basic
@@ -57,7 +52,7 @@ versions, if you utilize these consider using the tilde ~ operator in your packa
 breaking changes may be introduced as part of these specification updates.
 
 ## Certification
-[<img width="184" height="96" align="right" src="https://cdn.jsdelivr.net/gh/panva/node-openid-client@38cf016b0837e6d4116de3780b28d222d5780bc9/OpenID_Certified.png" alt="OpenID Certification">][openid-certified-link]  
+[<img width="184" height="96" align="right" src="https://cdn.jsdelivr.net/gh/panva/openid-client@38cf016b0837e6d4116de3780b28d222d5780bc9/OpenID_Certified.png" alt="OpenID Certification">][openid-certified-link]  
 Filip Skokan has [certified][openid-certified-link] that [openid-client][npm-url]
 conforms to the RP Basic, RP Implicit, RP Hybrid, RP Config, RP Dynamic and RP Form Post profiles
 of the OpenID Connect™ protocol.
@@ -77,12 +72,15 @@ If you or your business use openid-client, please consider becoming a [Patron][s
 
 
 ## Get started
-On the off-chance you want to manage multiple clients for multiple issuers you need to first get
-an Issuer instance.
+Requiring the Issuer is always your first step. Then you'll instantiate it, either via discovery or
+manually.
+
+```js
+const { Issuer } = require('openid-client');
+```
 
 ### via Discovery (recommended)
 ```js
-const { Issuer } = require('openid-client');
 Issuer.discover('https://accounts.google.com') // => Promise
   .then(function (googleIssuer) {
     console.log('Discovered issuer %s %O', googleIssuer.issuer, googleIssuer.metadata);
@@ -91,7 +89,6 @@ Issuer.discover('https://accounts.google.com') // => Promise
 
 ### manually
 ```js
-const { Issuer } = require('openid-client');
 const googleIssuer = new Issuer({
   issuer: 'https://accounts.google.com',
   authorization_endpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
@@ -402,8 +399,8 @@ client.authorizationCallback(..., ...).then(function (tokenSet) {
 ```
 
 ## Usage with passport
-Once you have a Client instance, just pass it to the Strategy constructor. Issuer is best
-discovered, Client passed properties manually or via an uri (see [get-started](#get-started)).
+Once you have a Client instance, just pass it to the Strategy constructor (see below). Issuer is
+best discovered, Client passed properties manually or via an uri (see [get-started](#get-started)).
 
 Verify function is invoked with a TokenSet, userinfo only when requested, last argument is always
 the done function which you invoke once you found your user.
@@ -446,6 +443,66 @@ app.get('/auth/cb', passport.authenticate('oidc', { successRedirect: '/', failur
 ```
 
 ## Configuration
+
+### Issuer properties
+
+These IANA registered OAuth Authorization Server Metadata / OpenID Provider Metadata properties have
+functionality bound to them:
+
+<details>
+  <summary>(Click to expand) OAuth Authorization Server Metadata / OpenID Provider Metadata properties that have behaviour bound to them.
+</summary>
+  <br>
+
+- `issuer` - issuer identifier, used when asserting signed response payloads
+- `jwks_uri` - used when fetching the issuer's asymmetric signing and encryption keys
+- `authorization_endpoint` - used when generating the authorization redirect url
+- `userinfo_endpoint` - used when fetching userinfo
+- `token_endpoint` - used when calling the token endpoint
+- `introspection_endpoint` - used when fetching introspection responses
+- `revocation_endpoint` - used when revoking a token
+- `registration_endpoint` - used when dynamically registering a client
+- `end_session_endpoint` - used when generating the end session redirect url
+- `code_challenge_methods_supported` - used by the passport strategy to figure out which challenge method to use
+- `introspection_endpoint_auth_signing_alg_values_supported` - used when client using `*_jwt` auth method doesn't have a specific introspection auth signing alg value defined
+- `revocation_endpoint_auth_signing_alg_values_supported` - used when client using `*_jwt` auth method doesn't have a specific revocation auth signing alg value defined
+- `token_endpoint_auth_signing_alg_values_supported` - used when client using `*_jwt` auth method doesn't have a specific token auth signing alg value defined
+
+</details>
+
+### Client properties
+
+These Client Metadata properties have functionality bound to them.
+
+<details>
+  <summary>(Click to expand) Client Metadata properties that have behaviour bound to them.
+</summary>
+  <br>
+
+- `client_id` - `¯\_(ツ)_/¯`
+- `client_secret` - `¯\_(ツ)_/¯`
+- `redirect_uris` - if a single redirect_uri is present in the array it'll be used in relevant helpers, if you have more just omit it altogether and pass the values explicitly to these helpers
+- `default_max_age` - when provided ID Tokens will be checked both for presence of the auth_time claim as well as it's value during the authorization callback phase
+- `id_token_signed_response_alg` - asserted ID Token signing algorithm
+- `require_auth_time` - when true ID Tokens will be checked for presence of the auth_time claim
+- `response_types` - if a single response_type is present in the array it'll be used in relevant helpers, if you have more just omit it altogether and pass the values explicitly to these helpers
+- `post_logout_redirect_uris` - if a single post_logout_redirect_uri is present in the array it'll be used in relevant helpers, if you have more just omit it altogether and pass the values explicitly to these helpers
+- `token_endpoint_auth_method` - client authentication method for the token endpoint
+- `introspection_endpoint_auth_method` - client authentication method for the introspection endpoint
+- `revocation_endpoint_auth_method` - client authentication method for the revocation endpoint
+- `id_token_encrypted_response_alg` - negotiated id token encryption alg
+- `id_token_encrypted_response_enc` - negotiated id token encryption enc alg
+- `userinfo_signed_response_alg` - negotiated userinfo signing alg
+- `userinfo_encrypted_response_alg` - negotiated userinfo encryption alg
+- `userinfo_encrypted_response_enc` - negotiated userinfo encryption enc alg
+- `introspection_endpoint_auth_signing_alg` - used for `*_jwt` auth method signing
+- `revocation_endpoint_auth_signing_alg` - used for `*_jwt` auth method signing
+- `token_endpoint_auth_signing_alg` - used for `*_jwt` auth method signing
+- `request_object_signing_alg` - negotiated request object signing alg
+- `request_object_encryption_alg` - negotiated request object encryption alg
+- `request_object_encryption_enc` - negotiated request object encryption enc alg
+
+</details>
 
 ### Client Authentication explained
 
@@ -490,7 +547,7 @@ openid-client uses [got][got-library] for http requests with the following defau
 const DEFAULT_HTTP_OPTIONS = {
   followRedirect: false,
   headers: { 'User-Agent': `${pkg.name}/${pkg.version} (${pkg.homepage})` },
-  retries: 0,
+  retry: 0,
   timeout: 1500,
 };
 ```
@@ -521,7 +578,7 @@ Custom implementation:
  * options.form {Boolean}
  * options.query {Object}
  * options.timeout {Number}
- * options.retries {Number}
+ * options.retry {Number}
  * options.followRedirect {Boolean}
  */
 
@@ -544,12 +601,12 @@ Issuer.useRequest();
 ```
 
 
-[travis-image]: https://api.travis-ci.com/panva/node-openid-client.svg?branch=master
-[travis-url]: https://travis-ci.com/panva/node-openid-client
+[travis-image]: https://api.travis-ci.com/panva/openid-client.svg?branch=master
+[travis-url]: https://travis-ci.com/panva/openid-client
 [conformance-image]: https://api.travis-ci.com/panva/openid-client-conformance-tests.svg?branch=master
 [conformance-url]: https://github.com/panva/openid-client-conformance-tests
-[codecov-image]: https://codecov.io/gh/panva/node-openid-client/branch/master/graph/badge.svg
-[codecov-url]: https://codecov.io/gh/panva/node-openid-client
+[codecov-image]: https://codecov.io/gh/panva/openid-client/branch/master/graph/badge.svg
+[codecov-url]: https://codecov.io/gh/panva/openid-client
 [openid-connect]: https://openid.net/connect/
 [heroku-example]: https://tranquil-reef-95185.herokuapp.com/client
 [oidc-provider]: https://github.com/panva/node-oidc-provider

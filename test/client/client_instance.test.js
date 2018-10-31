@@ -1,9 +1,10 @@
+/* global window */
+
 const url = require('url');
 const querystring = require('querystring');
 const stdhttp = require('http');
 
 const MockRequest = require('readable-mock-req');
-const _ = require('lodash');
 const { expect } = require('chai');
 const base64url = require('base64url');
 const nock = require('nock');
@@ -20,1253 +21,1464 @@ const noop = () => {};
 const fail = () => { throw new Error('expected promise to be rejected'); };
 const encode = object => base64url.encode(JSON.stringify(object));
 
-['useGot', 'useRequest'].forEach((httpProvider) => {
-  describe(`Client - using ${httpProvider.substring(3).toLowerCase()}`, function () {
+describe('Client', () => {
+  afterEach(timekeeper.reset);
+  afterEach(nock.cleanAll);
+
+  describe('#authorizationUrl', function () {
     before(function () {
-      Issuer[httpProvider]();
-    });
-
-    afterEach(timekeeper.reset);
-    afterEach(nock.cleanAll);
-
-    describe('#authorizationUrl', function () {
-      before(function () {
-        const issuer = new Issuer({
-          authorization_endpoint: 'https://op.example.com/auth',
-        });
-        this.client = new issuer.Client({
-          client_id: 'identifier',
-        });
-
-        const issuerWithQuery = new Issuer({
-          authorization_endpoint: 'https://op.example.com/auth?foo=bar',
-        });
-        this.clientWithQuery = new issuerWithQuery.Client({
-          client_id: 'identifier',
-        });
+      const issuer = new Issuer({
+        authorization_endpoint: 'https://op.example.com/auth',
+      });
+      this.client = new issuer.Client({
+        client_id: 'identifier',
+      });
+      this.clientWithMeta = new issuer.Client({
+        client_id: 'identifier',
+        response_types: ['code id_token'],
+        redirect_uris: ['https://rp.example.com/cb'],
+      });
+      this.clientWithMultipleMetas = new issuer.Client({
+        client_id: 'identifier',
+        response_types: ['code id_token', 'id_token'],
+        redirect_uris: ['https://rp.example.com/cb', 'https://rp.example.com/cb2'],
       });
 
-      it('returns a string with the url with some basic defaults', function () {
-        expect(url.parse(this.client.authorizationUrl({
-          redirect_uri: 'https://rp.example.com/cb',
-        }), true).query).to.eql({
-          client_id: 'identifier',
-          redirect_uri: 'https://rp.example.com/cb',
-          response_type: 'code',
-          scope: 'openid',
-        });
+      const issuerWithQuery = new Issuer({
+        authorization_endpoint: 'https://op.example.com/auth?foo=bar',
       });
-
-      it('keeps original query parameters', function () {
-        expect(url.parse(this.clientWithQuery.authorizationUrl({
-          redirect_uri: 'https://rp.example.com/cb',
-        }), true).query).to.eql({
-          client_id: 'identifier',
-          redirect_uri: 'https://rp.example.com/cb',
-          response_type: 'code',
-          scope: 'openid',
-          foo: 'bar',
-        });
-      });
-
-      it('allows to overwrite the defaults', function () {
-        expect(url.parse(this.client.authorizationUrl({
-          scope: 'openid offline_access',
-          redirect_uri: 'https://rp.example.com/cb',
-          response_type: 'id_token',
-          nonce: 'foobar',
-        }), true).query).to.eql({
-          client_id: 'identifier',
-          scope: 'openid offline_access',
-          redirect_uri: 'https://rp.example.com/cb',
-          response_type: 'id_token',
-          nonce: 'foobar',
-        });
-      });
-
-      it('allows any other params to be provide too', function () {
-        expect(url.parse(this.client.authorizationUrl({
-          state: 'state',
-          custom: 'property',
-        }), true).query).to.contain({
-          state: 'state',
-          custom: 'property',
-        });
-      });
-
-      it('auto-stringifies claims parameter', function () {
-        expect(url.parse(this.client.authorizationUrl({
-          claims: { id_token: { email: null } },
-        }), true).query).to.contain({
-          claims: '{"id_token":{"email":null}}',
-        });
-      });
-
-      it('removes null and undefined values', function () {
-        expect(url.parse(this.client.authorizationUrl({
-          state: null,
-          prompt: undefined,
-        }), true).query).not.to.have.keys('state', 'prompt');
-      });
-
-      it('stringifies other values', function () {
-        expect(url.parse(this.client.authorizationUrl({
-          max_age: 300,
-          foo: true,
-        }), true).query).to.contain({
-          max_age: '300',
-          foo: 'true',
-        });
+      this.clientWithQuery = new issuerWithQuery.Client({
+        client_id: 'identifier',
       });
     });
 
-    describe('#endSessionUrl', function () {
-      before(function () {
-        const issuer = new Issuer({
-          end_session_endpoint: 'https://op.example.com/session/end',
-        });
-        this.client = new issuer.Client({
-          client_id: 'identifier',
-        });
-        this.clientWithUris = new issuer.Client({
-          post_logout_redirect_uris: ['https://rp.example.com/logout/cb'],
-        });
-
-        const issuerWithQuery = new Issuer({
-          end_session_endpoint: 'https://op.example.com/session/end?foo=bar',
-        });
-        this.clientWithQuery = new issuerWithQuery.Client({
-          client_id: 'identifier',
-        });
-
-        const issuerWithoutMeta = new Issuer({
-          // end_session_endpoint: 'https://op.example.com/session/end?foo=bar',
-        });
-        this.clientWithoutMeta = new issuerWithoutMeta.Client({
-          client_id: 'identifier',
-        });
-      });
-
-      it("throws if the issuer doesn't have end_session_endpoint configured", function () {
-        expect(() => {
-          this.clientWithoutMeta.endSessionUrl();
-        }).to.throw('end_session_endpoint must be configured on the issuer');
-      });
-
-      it('returns the end_session_endpoint only if nothing is passed', function () {
-        expect(this.client.endSessionUrl()).to.eql('https://op.example.com/session/end');
-        expect(this.clientWithQuery.endSessionUrl()).to.eql('https://op.example.com/session/end?foo=bar');
-      });
-
-      it('defaults the post_logout_redirect_uri if client has some', function () {
-        expect(url.parse(this.clientWithUris.endSessionUrl(), true).query).to.eql({
-          post_logout_redirect_uri: 'https://rp.example.com/logout/cb',
-        });
-      });
-
-      it('takes a TokenSet too', function () {
-        const hint = new TokenSet({
-          id_token: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJzdWJqZWN0In0.',
-          refresh_token: 'bar',
-          access_token: 'tokenValue',
-        });
-        expect(url.parse(this.client.endSessionUrl({
-          id_token_hint: hint,
-        }), true).query).to.eql({
-          id_token_hint: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJzdWJqZWN0In0.',
-        });
-      });
-
-      it('allows for recommended and optional query params to be passed in', function () {
-        expect(url.parse(this.client.endSessionUrl({
-          post_logout_redirect_uri: 'https://rp.example.com/logout/cb',
-          state: 'foo',
-          id_token_hint: 'idtoken',
-        }), true).query).to.eql({
-          post_logout_redirect_uri: 'https://rp.example.com/logout/cb',
-          state: 'foo',
-          id_token_hint: 'idtoken',
-        });
-        expect(url.parse(this.clientWithQuery.endSessionUrl({
-          post_logout_redirect_uri: 'https://rp.example.com/logout/cb',
-          state: 'foo',
-          id_token_hint: 'idtoken',
-          foo: 'this will be ignored',
-        }), true).query).to.eql({
-          post_logout_redirect_uri: 'https://rp.example.com/logout/cb',
-          state: 'foo',
-          foo: 'bar',
-          id_token_hint: 'idtoken',
-        });
+    it('returns a string with the url with some basic defaults', function () {
+      expect(url.parse(this.client.authorizationUrl({
+        redirect_uri: 'https://rp.example.com/cb',
+      }), true).query).to.eql({
+        client_id: 'identifier',
+        redirect_uri: 'https://rp.example.com/cb',
+        response_type: 'code',
+        scope: 'openid',
       });
     });
 
-    describe('#authorizationPost', function () {
-      const REGEXP = /name="(.+)" value="(.+)"/g;
-
-      function paramsFromHTML(html) {
-        const params = {};
-
-        const matches = html.match(REGEXP);
-        matches.forEach((line) => {
-          line.match(REGEXP);
-          params[RegExp.$1] = RegExp.$2;
-        });
-
-        return params;
-      }
-
-      before(function () {
-        const issuer = new Issuer({
-          authorization_endpoint: 'https://op.example.com/auth',
-        });
-        this.client = new issuer.Client({
-          client_id: 'identifier',
-        });
-      });
-
-      it('returns a string with the url with some basic defaults', function () {
-        expect(paramsFromHTML(this.client.authorizationPost({
-          redirect_uri: 'https://rp.example.com/cb',
-        }))).to.eql({
-          client_id: 'identifier',
-          redirect_uri: 'https://rp.example.com/cb',
-          response_type: 'code',
-          scope: 'openid',
-        });
-      });
-
-      it('allows to overwrite the defaults', function () {
-        expect(paramsFromHTML(this.client.authorizationPost({
-          scope: 'openid offline_access',
-          redirect_uri: 'https://rp.example.com/cb',
-          response_type: 'id_token',
-          nonce: 'foobar',
-        }))).to.eql({
-          client_id: 'identifier',
-          scope: 'openid offline_access',
-          redirect_uri: 'https://rp.example.com/cb',
-          response_type: 'id_token',
-          nonce: 'foobar',
-        });
-      });
-
-      it('allows any other params to be provide too', function () {
-        expect(paramsFromHTML(this.client.authorizationPost({
-          state: 'state',
-          custom: 'property',
-        }))).to.contain({
-          state: 'state',
-          custom: 'property',
-        });
-      });
-
-      it('auto-stringifies claims parameter', function () {
-        expect(paramsFromHTML(this.client.authorizationPost({
-          claims: { id_token: { email: null } },
-        }))).to.contain({
-          claims: '{"id_token":{"email":null}}',
-        });
+    it('returns a string with the url and client meta specific defaults', function () {
+      expect(url.parse(this.clientWithMeta.authorizationUrl({
+        nonce: 'foo',
+      }), true).query).to.eql({
+        nonce: 'foo',
+        client_id: 'identifier',
+        redirect_uri: 'https://rp.example.com/cb',
+        response_type: 'code id_token',
+        scope: 'openid',
       });
     });
 
-    describe('#authorizationCallback', function () {
-      before(function () {
-        this.issuer = new Issuer({
-          token_endpoint: 'https://op.example.com/token',
-        });
-        this.client = new this.issuer.Client({
-          client_id: 'identifier',
-          client_secret: 'secure',
-        });
+    it('returns a string with the url and no defaults if client has more metas', function () {
+      expect(url.parse(this.clientWithMultipleMetas.authorizationUrl(), true).query).to.eql({
+        client_id: 'identifier',
+        scope: 'openid',
+      });
+    });
+
+    it('keeps original query parameters', function () {
+      expect(url.parse(this.clientWithQuery.authorizationUrl({
+        redirect_uri: 'https://rp.example.com/cb',
+      }), true).query).to.eql({
+        client_id: 'identifier',
+        redirect_uri: 'https://rp.example.com/cb',
+        response_type: 'code',
+        scope: 'openid',
+        foo: 'bar',
+      });
+    });
+
+    it('allows to overwrite the defaults', function () {
+      expect(url.parse(this.client.authorizationUrl({
+        scope: 'openid offline_access',
+        redirect_uri: 'https://rp.example.com/cb',
+        response_type: 'id_token',
+        nonce: 'foobar',
+      }), true).query).to.eql({
+        client_id: 'identifier',
+        scope: 'openid offline_access',
+        redirect_uri: 'https://rp.example.com/cb',
+        response_type: 'id_token',
+        nonce: 'foobar',
+      });
+    });
+
+    it('allows any other params to be provide too', function () {
+      expect(url.parse(this.client.authorizationUrl({
+        state: 'state',
+        custom: 'property',
+      }), true).query).to.contain({
+        state: 'state',
+        custom: 'property',
+      });
+    });
+
+    it('auto-stringifies claims parameter', function () {
+      expect(url.parse(this.client.authorizationUrl({
+        claims: { id_token: { email: null } },
+      }), true).query).to.contain({
+        claims: '{"id_token":{"email":null}}',
+      });
+    });
+
+    it('removes null and undefined values', function () {
+      expect(url.parse(this.client.authorizationUrl({
+        state: null,
+        prompt: undefined,
+      }), true).query).not.to.have.keys('state', 'prompt');
+    });
+
+    it('stringifies other values', function () {
+      expect(url.parse(this.client.authorizationUrl({
+        max_age: 300,
+        foo: true,
+      }), true).query).to.contain({
+        max_age: '300',
+        foo: 'true',
+      });
+    });
+  });
+
+  describe('#endSessionUrl', function () {
+    before(function () {
+      const issuer = new Issuer({
+        end_session_endpoint: 'https://op.example.com/session/end',
+      });
+      this.client = new issuer.Client({
+        client_id: 'identifier',
+      });
+      this.clientWithUris = new issuer.Client({
+        post_logout_redirect_uris: ['https://rp.example.com/logout/cb'],
       });
 
-      it('does an authorization_code grant with code and redirect_uri', function () {
-        nock('https://op.example.com')
-          .filteringRequestBody(function (body) {
-            expect(querystring.parse(body)).to.eql({
-              code: 'codeValue',
-              redirect_uri: 'https://rp.example.com/cb',
-              grant_type: 'authorization_code',
-            });
-          })
-          .post('/token')
-          .reply(200, {});
-
-        return this.client.authorizationCallback('https://rp.example.com/cb', {
-          code: 'codeValue',
-        })
-          .then(fail, () => {
-            expect(nock.isDone()).to.be.true;
-          });
+      const issuerWithQuery = new Issuer({
+        end_session_endpoint: 'https://op.example.com/session/end?foo=bar',
+      });
+      this.clientWithQuery = new issuerWithQuery.Client({
+        client_id: 'identifier',
       });
 
-      it('pushes default_max_age to #validateIdToken', function () {
-        const client = new this.issuer.Client({
-          client_id: 'with-default_max_age',
-          client_secret: 'secure',
-          default_max_age: 300,
-        });
+      const issuerWithoutMeta = new Issuer({
+        // end_session_endpoint: 'https://op.example.com/session/end?foo=bar',
+      });
+      this.clientWithoutMeta = new issuerWithoutMeta.Client({
+        client_id: 'identifier',
+      });
+    });
 
-        nock('https://op.example.com')
-          .post('/token')
-          .reply(200, {
-            id_token: 'foobar',
-          });
+    it("throws if the issuer doesn't have end_session_endpoint configured", function () {
+      expect(() => {
+        this.clientWithoutMeta.endSessionUrl();
+      }).to.throw('end_session_endpoint must be configured on the issuer');
+    });
 
-        sinon.spy(client, 'validateIdToken');
+    it('returns the end_session_endpoint only if nothing is passed', function () {
+      expect(this.client.endSessionUrl()).to.eql('https://op.example.com/session/end');
+      expect(this.clientWithQuery.endSessionUrl()).to.eql('https://op.example.com/session/end?foo=bar');
+    });
 
-        return client.authorizationCallback('https://rp.example.com/cb', {
-          code: 'codeValue',
-        })
-          .then(fail, () => {
-            expect(client.validateIdToken.calledOnce).to.be.true;
-            expect(client.validateIdToken.firstCall.args[3]).to.equal(300);
-          });
+    it('defaults the post_logout_redirect_uri if client has some', function () {
+      expect(url.parse(this.clientWithUris.endSessionUrl(), true).query).to.eql({
+        post_logout_redirect_uri: 'https://rp.example.com/logout/cb',
+      });
+    });
+
+    it('takes a TokenSet too', function () {
+      const hint = new TokenSet({
+        id_token: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJzdWJqZWN0In0.',
+        refresh_token: 'bar',
+        access_token: 'tokenValue',
+      });
+      expect(url.parse(this.client.endSessionUrl({
+        id_token_hint: hint,
+      }), true).query).to.eql({
+        id_token_hint: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJzdWJqZWN0In0.',
+      });
+    });
+
+    it('allows for recommended and optional query params to be passed in', function () {
+      expect(url.parse(this.client.endSessionUrl({
+        post_logout_redirect_uri: 'https://rp.example.com/logout/cb',
+        state: 'foo',
+        id_token_hint: 'idtoken',
+      }), true).query).to.eql({
+        post_logout_redirect_uri: 'https://rp.example.com/logout/cb',
+        state: 'foo',
+        id_token_hint: 'idtoken',
+      });
+      expect(url.parse(this.clientWithQuery.endSessionUrl({
+        post_logout_redirect_uri: 'https://rp.example.com/logout/cb',
+        state: 'foo',
+        id_token_hint: 'idtoken',
+        foo: 'this will be ignored',
+      }), true).query).to.eql({
+        post_logout_redirect_uri: 'https://rp.example.com/logout/cb',
+        state: 'foo',
+        foo: 'bar',
+        id_token_hint: 'idtoken',
+      });
+    });
+  });
+
+  describe('#authorizationPost', function () {
+    const REGEXP = /name="(.+)" value="(.+)"/g;
+
+    function paramsFromHTML(html) {
+      const params = {};
+
+      const matches = html.match(REGEXP);
+      matches.forEach((line) => {
+        line.match(REGEXP);
+        params[RegExp.$1] = RegExp.$2;
       });
 
-      it('resolves a tokenset with just a state for response_type=none', function () {
-        const state = { state: 'foo' };
-        return this.client.authorizationCallback('https://rp.example.com/cb', state, state)
-          .then((set) => {
-            expect(set).to.be.instanceof(TokenSet);
-            expect(set).to.have.property('state', 'foo');
-          });
-      });
+      return params;
+    }
 
-      it('rejects with OpenIdConnectError when part of the response', function () {
-        return this.client.authorizationCallback('https://rp.example.com/cb', {
-          error: 'invalid_request',
-        }).then(fail, (error) => {
-          expect(error).to.be.instanceof(OpenIdConnectError);
-          expect(error).to.have.property('error', 'invalid_request');
-        });
+    before(function () {
+      const issuer = new Issuer({
+        authorization_endpoint: 'https://op.example.com/auth',
       });
+      this.client = new issuer.Client({
+        client_id: 'identifier',
+      });
+    });
 
-      describe('state checks', function () {
-        it('rejects with an Error when states mismatch (returned)', function () {
+    it('returns a string with the url with some basic defaults', function () {
+      expect(paramsFromHTML(this.client.authorizationPost({
+        redirect_uri: 'https://rp.example.com/cb',
+      }))).to.eql({
+        client_id: 'identifier',
+        redirect_uri: 'https://rp.example.com/cb',
+        response_type: 'code',
+        scope: 'openid',
+      });
+    });
+
+    it('allows to overwrite the defaults', function () {
+      expect(paramsFromHTML(this.client.authorizationPost({
+        scope: 'openid offline_access',
+        redirect_uri: 'https://rp.example.com/cb',
+        response_type: 'id_token',
+        nonce: 'foobar',
+      }))).to.eql({
+        client_id: 'identifier',
+        scope: 'openid offline_access',
+        redirect_uri: 'https://rp.example.com/cb',
+        response_type: 'id_token',
+        nonce: 'foobar',
+      });
+    });
+
+    it('allows any other params to be provide too', function () {
+      expect(paramsFromHTML(this.client.authorizationPost({
+        state: 'state',
+        custom: 'property',
+      }))).to.contain({
+        state: 'state',
+        custom: 'property',
+      });
+    });
+
+    it('auto-stringifies claims parameter', function () {
+      expect(paramsFromHTML(this.client.authorizationPost({
+        claims: { id_token: { email: null } },
+      }))).to.contain({
+        claims: '{"id_token":{"email":null}}',
+      });
+    });
+  });
+
+  describe('#authorizationCallback', function () {
+    before(function () {
+      this.issuer = new Issuer({
+        token_endpoint: 'https://op.example.com/token',
+      });
+      this.client = new this.issuer.Client({
+        client_id: 'identifier',
+        client_secret: 'secure',
+      });
+    });
+
+    if (typeof window === 'undefined') {
+      describe('non-browser env behaviour', () => {
+        it('does an authorization_code grant with code and redirect_uri', function () {
+          nock('https://op.example.com')
+            .filteringRequestBody(function (body) {
+              expect(querystring.parse(body)).to.eql({
+                code: 'codeValue',
+                redirect_uri: 'https://rp.example.com/cb',
+                grant_type: 'authorization_code',
+              });
+            })
+            .post('/token')
+            .reply(200, {});
+
           return this.client.authorizationCallback('https://rp.example.com/cb', {
-            state: 'should be checked for this',
-          }).then(fail, (error) => {
-            expect(error).to.be.instanceof(Error);
-            expect(error).to.have.property('message', 'checks.state argument is missing');
-          });
-        });
-
-        it('rejects with an Error when states mismatch (not returned)', function () {
-          return this.client.authorizationCallback('https://rp.example.com/cb', {}, {
-            state: 'should be this',
+            code: 'codeValue',
           })
-            .then(fail, (error) => {
-              expect(error).to.be.instanceof(Error);
-              expect(error).to.have.property('message', 'state missing from the response');
+            .then(fail, () => {
+              expect(nock.isDone()).to.be.true;
             });
         });
 
-        it('rejects with an Error when states mismatch (general mismatch)', function () {
-          return this.client.authorizationCallback('https://rp.example.com/cb', {
-            state: 'is this',
-          }, {
-            state: 'should be this',
+        it('pushes default_max_age to #validateIdToken', function () {
+          const client = new this.issuer.Client({
+            client_id: 'with-default_max_age',
+            client_secret: 'secure',
+            default_max_age: 300,
+          });
+
+          nock('https://op.example.com')
+            .post('/token')
+            .reply(200, {
+              id_token: 'foobar',
+            });
+
+          sinon.spy(client, 'validateIdToken');
+
+          return client.authorizationCallback('https://rp.example.com/cb', {
+            code: 'codeValue',
           })
-            .then(fail, (error) => {
-              expect(error).to.be.instanceof(Error);
-              expect(error).to.have.property('message', 'state mismatch');
+            .then(fail, () => {
+              expect(client.validateIdToken.calledOnce).to.be.true;
+              expect(client.validateIdToken.firstCall.args[3]).to.equal(300);
             });
         });
       });
-
-      describe('response type checks', function () {
-        it('rejects with an Error when code is missing', function () {
+    } else {
+      describe('browser env behaviour', () => {
+        it('doesn\'t do the token exchange', function () {
           return this.client.authorizationCallback('https://rp.example.com/cb', {
-            // code: 'foo',
-            access_token: 'foo',
-            token_type: 'Bearer',
+            code: 'codeValue',
+          })
+            .then((set) => {
+              expect(set).to.be.instanceof(TokenSet);
+              expect(set).to.have.property('code', 'codeValue');
+            });
+        });
+
+        it('pushes default_max_age to #validateIdToken', function () {
+          const client = new this.issuer.Client({
+            client_id: 'with-default_max_age',
+            client_secret: 'secure',
+            default_max_age: 300,
+          });
+
+          sinon.spy(client, 'validateIdToken');
+
+          return client.authorizationCallback('https://rp.example.com/cb', {
             id_token: 'foo',
-          }, {
-            response_type: 'code id_token token',
-          }).then(fail, (error) => {
-            expect(error).to.be.instanceof(Error);
-            expect(error).to.have.property('message', 'code missing from response');
-          });
-        });
-
-        it('rejects with an Error when id_token is missing', function () {
-          return this.client.authorizationCallback('https://rp.example.com/cb', {
-            code: 'foo',
-            access_token: 'foo',
-            token_type: 'Bearer',
-            // id_token: 'foo',
-          }, {
-            response_type: 'code id_token token',
-          }).then(fail, (error) => {
-            expect(error).to.be.instanceof(Error);
-            expect(error).to.have.property('message', 'id_token missing from response');
-          });
-        });
-
-        it('rejects with an Error when token_type is missing', function () {
-          return this.client.authorizationCallback('https://rp.example.com/cb', {
-            code: 'foo',
-            access_token: 'foo',
-            // token_type: 'Bearer',
-            id_token: 'foo',
-          }, {
-            response_type: 'code id_token token',
-          }).then(fail, (error) => {
-            expect(error).to.be.instanceof(Error);
-            expect(error).to.have.property('message', 'token_type missing from response');
-          });
-        });
-
-        it('rejects with an Error when access_token is missing', function () {
-          return this.client.authorizationCallback('https://rp.example.com/cb', {
-            code: 'foo',
-            // access_token: 'foo',
-            token_type: 'Bearer',
-            id_token: 'foo',
-          }, {
-            response_type: 'code id_token token',
-          }).then(fail, (error) => {
-            expect(error).to.be.instanceof(Error);
-            expect(error).to.have.property('message', 'access_token missing from response');
-          });
-        });
-
-        ['code', 'access_token', 'id_token'].forEach((param) => {
-          it(`rejects with an Error when ${param} is encoutered during "none" response`, function () {
-            return this.client.authorizationCallback('https://rp.example.com/cb', {
-              [param]: 'foo',
-            }, {
-              response_type: 'none',
-            }).then(fail, (error) => {
-              expect(error).to.be.instanceof(Error);
-              expect(error).to.have.property('message', 'unexpected params encountered for "none" response');
-            });
-          });
-        });
-      });
-    });
-
-    describe('#oauthCallback', function () {
-      before(function () {
-        this.issuer = new Issuer({
-          token_endpoint: 'https://op.example.com/token',
-        });
-        this.client = new this.issuer.Client({
-          client_id: 'identifier',
-          client_secret: 'secure',
-        });
-      });
-
-      it('does an authorization_code grant with code and redirect_uri', function () {
-        nock('https://op.example.com')
-          .filteringRequestBody(function (body) {
-            expect(querystring.parse(body)).to.eql({
-              code: 'codeValue',
-              redirect_uri: 'https://rp.example.com/cb',
-              grant_type: 'authorization_code',
-            });
           })
-          .post('/token')
-          .reply(200, {
-            access_token: 'tokenValue',
-          });
+            .then(fail, () => {
+              expect(client.validateIdToken.calledOnce).to.be.true;
+              expect(client.validateIdToken.firstCall.args[3]).to.equal(300);
+            });
+        });
+      });
 
-        return this.client.oauthCallback('https://rp.example.com/cb', {
-          code: 'codeValue',
-        }).then((set) => {
-          expect(nock.isDone()).to.be.true;
+      describe('browser env behaviour with forceTokenExchange=true', () => {
+        it('does an authorization_code grant with code and redirect_uri', function () {
+          nock('https://op.example.com')
+            .filteringRequestBody(function (body) {
+              expect(querystring.parse(body)).to.eql({
+                code: 'codeValue',
+                redirect_uri: 'https://rp.example.com/cb',
+                grant_type: 'authorization_code',
+                code_verifier: 'foo',
+              });
+            })
+            .post('/token')
+            .reply(200, {});
+
+          return this.client.authorizationCallback('https://rp.example.com/cb', {
+            code: 'codeValue',
+          }, { code_verifier: 'foo' }, { forceTokenExchange: true })
+            .then(fail, () => {
+              expect(nock.isDone()).to.be.true;
+            });
+        });
+      });
+    }
+
+    it('resolves a tokenset with just a state for response_type=none', function () {
+      const state = { state: 'foo' };
+      return this.client.authorizationCallback('https://rp.example.com/cb', state, state)
+        .then((set) => {
           expect(set).to.be.instanceof(TokenSet);
-          expect(set).to.have.property('access_token', 'tokenValue');
+          expect(set).to.have.property('state', 'foo');
         });
-      });
+    });
 
-      it('handles implicit responses too', function () {
-        return this.client.oauthCallback(undefined, {
-          access_token: 'tokenValue',
-        }).then((set) => {
-          expect(set).to.be.instanceof(TokenSet);
-          expect(set).to.have.property('access_token', 'tokenValue');
-        });
-      });
-
-      describe('response type checks', function () {
-        it('rejects with an Error when code is missing', function () {
-          return this.client.oauthCallback('https://rp.example.com/cb', {
-            // code: 'foo',
-            access_token: 'foo',
-            token_type: 'Bearer',
-          }, {
-            response_type: 'code token',
-          }).then(fail, (error) => {
-            expect(error).to.be.instanceof(Error);
-            expect(error).to.have.property('message', 'code missing from response');
-          });
-        });
-
-        it('rejects with an Error when token_type is missing', function () {
-          return this.client.oauthCallback('https://rp.example.com/cb', {
-            code: 'foo',
-            access_token: 'foo',
-            // token_type: 'Bearer',
-          }, {
-            response_type: 'code token',
-          }).then(fail, (error) => {
-            expect(error).to.be.instanceof(Error);
-            expect(error).to.have.property('message', 'token_type missing from response');
-          });
-        });
-
-        it('rejects with an Error when access_token is missing', function () {
-          return this.client.oauthCallback('https://rp.example.com/cb', {
-            code: 'foo',
-            // access_token: 'foo',
-            token_type: 'Bearer',
-          }, {
-            response_type: 'code token',
-          }).then(fail, (error) => {
-            expect(error).to.be.instanceof(Error);
-            expect(error).to.have.property('message', 'access_token missing from response');
-          });
-        });
-
-        ['code', 'access_token'].forEach((param) => {
-          it(`rejects with an Error when ${param} is encoutered during "none" response`, function () {
-            return this.client.oauthCallback('https://rp.example.com/cb', {
-              [param]: 'foo',
-            }, {
-              response_type: 'none',
-            }).then(fail, (error) => {
-              expect(error).to.be.instanceof(Error);
-              expect(error).to.have.property('message', 'unexpected params encountered for "none" response');
-            });
-          });
-        });
-      });
-
-      it('rejects with OpenIdConnectError when part of the response', function () {
-        return this.client.oauthCallback('https://rp.example.com/cb', {
-          error: 'invalid_request',
-        }).then(fail, (error) => {
-          expect(error).to.be.instanceof(OpenIdConnectError);
-          expect(error).to.have.property('error', 'invalid_request');
-        });
-      });
-
-      describe('state checks', function () {
-        it('rejects with an Error when states mismatch (returned)', function () {
-          return this.client.oauthCallback('https://rp.example.com/cb', {
-            state: 'should be checked for this',
-          }).then(fail, (error) => {
-            expect(error).to.be.instanceof(Error);
-            expect(error).to.have.property('message', 'checks.state argument is missing');
-          });
-        });
-
-        it('rejects with an Error when states mismatch (not returned)', function () {
-          return this.client.oauthCallback('https://rp.example.com/cb', {}, {
-            state: 'should be this',
-          })
-            .then(fail, (error) => {
-              expect(error).to.be.instanceof(Error);
-              expect(error).to.have.property('message', 'state missing from the response');
-            });
-        });
-
-        it('rejects with an Error when states mismatch (general mismatch)', function () {
-          return this.client.oauthCallback('https://rp.example.com/cb', {
-            state: 'is this',
-          }, {
-            state: 'should be this',
-          })
-            .then(fail, (error) => {
-              expect(error).to.be.instanceof(Error);
-              expect(error).to.have.property('message', 'state mismatch');
-            });
-        });
+    it('rejects with OpenIdConnectError when part of the response', function () {
+      return this.client.authorizationCallback('https://rp.example.com/cb', {
+        error: 'invalid_request',
+      }).then(fail, (error) => {
+        expect(error).to.be.instanceof(OpenIdConnectError);
+        expect(error).to.have.property('error', 'invalid_request');
       });
     });
 
-    describe('#refresh', function () {
-      before(function () {
-        const issuer = new Issuer({
-          token_endpoint: 'https://op.example.com/token',
-        });
-        this.client = new issuer.Client({
-          client_id: 'identifier',
-          client_secret: 'secure',
-        });
-      });
-
-      it('does an refresh_token grant with refresh_token', function () {
-        nock('https://op.example.com')
-          .filteringRequestBody(function (body) {
-            expect(querystring.parse(body)).to.eql({
-              refresh_token: 'refreshValue',
-              grant_type: 'refresh_token',
-            });
-          })
-          .post('/token')
-          .reply(200, {});
-
-        return this.client.refresh('refreshValue').then(() => {
-          expect(nock.isDone()).to.be.true;
+    describe('state checks', function () {
+      it('rejects with an Error when states mismatch (returned)', function () {
+        return this.client.authorizationCallback('https://rp.example.com/cb', {
+          state: 'should be checked for this',
+        }).then(fail, (error) => {
+          expect(error).to.be.instanceof(Error);
+          expect(error).to.have.property('message', 'checks.state argument is missing');
         });
       });
 
-      it('returns a TokenSet', function () {
-        nock('https://op.example.com')
-          .post('/token')
-          .reply(200, {
-            access_token: 'tokenValue',
-          });
-
-        return this.client.refresh('refreshValue', {})
-          .then((set) => {
-            expect(set).to.be.instanceof(TokenSet);
-            expect(set).to.have.property('access_token', 'tokenValue');
-          });
-      });
-
-      it('can take a TokenSet', function () {
-        nock('https://op.example.com')
-          .filteringRequestBody(function (body) {
-            expect(querystring.parse(body)).to.eql({
-              refresh_token: 'refreshValue',
-              grant_type: 'refresh_token',
-            });
-          })
-          .post('/token')
-          .reply(200, {});
-
-        return this.client.refresh(new TokenSet({
-          access_token: 'present',
-          refresh_token: 'refreshValue',
-        }))
-          .then(() => {
-            expect(nock.isDone()).to.be.true;
-          });
-      });
-
-      it('rejects when passed a TokenSet not containing refresh_token', function () {
-        return this.client.refresh(new TokenSet({
-          access_token: 'present',
-          // refresh_token: not
-        }))
+      it('rejects with an Error when states mismatch (not returned)', function () {
+        return this.client.authorizationCallback('https://rp.example.com/cb', {}, {
+          state: 'should be this',
+        })
           .then(fail, (error) => {
             expect(error).to.be.instanceof(Error);
-            expect(error).to.have.property('message', 'refresh_token not present in TokenSet');
+            expect(error).to.have.property('message', 'state missing from the response');
+          });
+      });
+
+      it('rejects with an Error when states mismatch (general mismatch)', function () {
+        return this.client.authorizationCallback('https://rp.example.com/cb', {
+          state: 'is this',
+        }, {
+          state: 'should be this',
+        })
+          .then(fail, (error) => {
+            expect(error).to.be.instanceof(Error);
+            expect(error).to.have.property('message', 'state mismatch');
           });
       });
     });
 
-    it('#joseSecret', function () {
-      const issuer = new Issuer();
-      const client = new issuer.Client({ client_secret: 'rj_JR' });
-
-      return client.joseSecret()
-        .then((key) => {
-          expect(key).to.have.property('kty', 'oct');
-          return client.joseSecret().then((cached) => {
-            expect(key).to.equal(cached);
-          });
-        });
-    });
-
-    it('#derivedKey', function () {
-      const issuer = new Issuer();
-      const client = new issuer.Client({ client_secret: 'rj_JR' });
-
-      return client.derivedKey('128')
-        .then((key) => {
-          expect(key).to.have.property('kty', 'oct');
-          return client.derivedKey('128').then((cached) => {
-            expect(key).to.equal(cached);
-          });
-        });
-    });
-
-    it('#inspect', function () {
-      const issuer = new Issuer({ issuer: 'https://op.example.com' });
-      const client = new issuer.Client({ client_id: 'identifier' });
-      expect(client.inspect()).to.equal('Client <identifier>');
-    });
-
-    describe('#userinfo', function () {
-      it('takes a string token', function () {
-        const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
-        const client = new issuer.Client();
-
-        nock('https://op.example.com')
-          .get('/me').reply(200, {});
-
-        return client.userinfo('tokenValue').then(() => {
-          expect(nock.isDone()).to.be.true;
-        });
-      });
-
-      it('takes a tokenset', function () {
-        const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
-        const client = new issuer.Client({
-          id_token_signed_response_alg: 'none',
-        });
-
-        nock('https://op.example.com')
-          .get('/me').reply(200, {
-            sub: 'subject',
-          });
-
-        return client.userinfo(new TokenSet({
-          id_token: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJzdWJqZWN0In0.',
-          refresh_token: 'bar',
-          access_token: 'tokenValue',
-        })).then(() => {
-          expect(nock.isDone()).to.be.true;
-        });
-      });
-
-      it('takes a tokenset and validates the subject in id_token is the same in userinfo', function () {
-        const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
-        const client = new issuer.Client({
-          id_token_signed_response_alg: 'none',
-        });
-
-        nock('https://op.example.com')
-          .get('/me').reply(200, {
-            sub: 'different-subject',
-          });
-
-        return client.userinfo(new TokenSet({
-          id_token: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJzdWJqZWN0In0.',
-          refresh_token: 'bar',
-          access_token: 'tokenValue',
-        })).then(fail, (err) => {
-          expect(nock.isDone()).to.be.true;
-          expect(err.message).to.equal('userinfo sub mismatch');
-        });
-      });
-
-      it('validates an access token is present in the tokenset', function () {
-        const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
-        const client = new issuer.Client();
-
-        return client.userinfo(new TokenSet({
+    describe('response type checks', function () {
+      it('rejects with an Error when code is missing', function () {
+        return this.client.authorizationCallback('https://rp.example.com/cb', {
+          // code: 'foo',
+          access_token: 'foo',
+          token_type: 'Bearer',
           id_token: 'foo',
-          refresh_token: 'bar',
-        })).then(fail, (error) => {
-          expect(error.message).to.equal('access_token not present in TokenSet');
+        }, {
+          response_type: 'code id_token token',
+        }).then(fail, (error) => {
+          expect(error).to.be.instanceof(Error);
+          expect(error).to.have.property('message', 'code missing from response');
         });
       });
 
-      it('can do a post call', function () {
-        const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
-        const client = new issuer.Client();
-
-        nock('https://op.example.com')
-          .post('/me').reply(200, {});
-
-        return client.userinfo('tokenValue', { verb: 'POST' }).then(() => {
-          expect(nock.isDone()).to.be.true;
+      it('rejects with an Error when id_token is missing', function () {
+        return this.client.authorizationCallback('https://rp.example.com/cb', {
+          code: 'foo',
+          access_token: 'foo',
+          token_type: 'Bearer',
+          // id_token: 'foo',
+        }, {
+          response_type: 'code id_token token',
+        }).then(fail, (error) => {
+          expect(error).to.be.instanceof(Error);
+          expect(error).to.have.property('message', 'id_token missing from response');
         });
       });
 
-      it('can submit access token in a body when post', function () {
-        const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
-        const client = new issuer.Client();
+      it('rejects with an Error when token_type is missing', function () {
+        return this.client.authorizationCallback('https://rp.example.com/cb', {
+          code: 'foo',
+          access_token: 'foo',
+          // token_type: 'Bearer',
+          id_token: 'foo',
+        }, {
+          response_type: 'code id_token token',
+        }).then(fail, (error) => {
+          expect(error).to.be.instanceof(Error);
+          expect(error).to.have.property('message', 'token_type missing from response');
+        });
+      });
 
+      it('rejects with an Error when access_token is missing', function () {
+        return this.client.authorizationCallback('https://rp.example.com/cb', {
+          code: 'foo',
+          // access_token: 'foo',
+          token_type: 'Bearer',
+          id_token: 'foo',
+        }, {
+          response_type: 'code id_token token',
+        }).then(fail, (error) => {
+          expect(error).to.be.instanceof(Error);
+          expect(error).to.have.property('message', 'access_token missing from response');
+        });
+      });
+
+      ['code', 'access_token', 'id_token'].forEach((param) => {
+        it(`rejects with an Error when ${param} is encoutered during "none" response`, function () {
+          return this.client.authorizationCallback('https://rp.example.com/cb', {
+            [param]: 'foo',
+          }, {
+            response_type: 'none',
+          }).then(fail, (error) => {
+            expect(error).to.be.instanceof(Error);
+            expect(error).to.have.property('message', 'unexpected params encountered for "none" response');
+          });
+        });
+      });
+    });
+  });
+
+  describe('#oauthCallback', function () {
+    before(function () {
+      this.issuer = new Issuer({
+        token_endpoint: 'https://op.example.com/token',
+      });
+      this.client = new this.issuer.Client({
+        client_id: 'identifier',
+        client_secret: 'secure',
+      });
+    });
+
+    if (typeof window === 'undefined') {
+      it('does an authorization_code grant with code and redirect_uri', function () {
         nock('https://op.example.com')
           .filteringRequestBody(function (body) {
             expect(querystring.parse(body)).to.eql({
-              access_token: 'tokenValue',
+              code: 'codeValue',
+              redirect_uri: 'https://rp.example.com/cb',
+              grant_type: 'authorization_code',
             });
           })
-          .post('/me').reply(200, {});
+          .post('/token')
+          .reply(200, {
+            access_token: 'tokenValue',
+          });
 
-        return client.userinfo('tokenValue', { verb: 'POST', via: 'body' }).then(() => {
+        return this.client.oauthCallback('https://rp.example.com/cb', {
+          code: 'codeValue',
+        }).then((set) => {
           expect(nock.isDone()).to.be.true;
+          expect(set).to.be.instanceof(TokenSet);
+          expect(set).to.have.property('access_token', 'tokenValue');
         });
       });
-
-      it('can add extra params in a body when post', function () {
-        const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
-        const client = new issuer.Client();
-
-        nock('https://op.example.com')
-          .filteringRequestBody(function (body) {
-            expect(querystring.parse(body)).to.eql({
-              access_token: 'tokenValue',
-              foo: 'bar',
-            });
+    } else {
+      describe('browser env behaviour', () => {
+        it('doesn\'t do the token exchange', function () {
+          return this.client.authorizationCallback('https://rp.example.com/cb', {
+            code: 'codeValue',
           })
-          .post('/me').reply(200, {});
-
-        return client.userinfo('tokenValue', {
-          verb: 'POST',
-          via: 'body',
-          params: { foo: 'bar' },
-        }).then(() => {
-          expect(nock.isDone()).to.be.true;
+            .then((set) => {
+              expect(set).to.be.instanceof(TokenSet);
+              expect(set).to.have.property('code', 'codeValue');
+            });
         });
       });
 
-      it('can add extra params in a query when non-post', function () {
-        const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
-        const client = new issuer.Client();
-
-        nock('https://op.example.com')
-          .get('/me?foo=bar')
-          .reply(200, {});
-
-        return client.userinfo('tokenValue', {
-          params: { foo: 'bar' },
-        }).then(() => {
-          expect(nock.isDone()).to.be.true;
-        });
-      });
-
-      it('can only submit access token in a body when post', function () {
-        const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
-        const client = new issuer.Client();
-
-        expect(function () {
-          client.userinfo('tokenValue', { via: 'body', verb: 'get' });
-        }).to.throw('can only send body on POST');
-      });
-
-      it('can submit access token in a query when get', function () {
-        const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
-        const client = new issuer.Client();
-
-        nock('https://op.example.com')
-          .get('/me?access_token=tokenValue')
-          .reply(200, {});
-
-        return client.userinfo('tokenValue', { via: 'query' }).then(() => {
-          expect(nock.isDone()).to.be.true;
-        });
-      });
-
-      it('can only submit access token in a query when get', function () {
-        const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
-        const client = new issuer.Client();
-
-        expect(function () {
-          client.userinfo('tokenValue', { via: 'query', verb: 'post' });
-        }).to.throw('providers should only parse query strings for GET requests');
-      });
-
-      it('is rejected with OpenIdConnectError upon oidc error', function () {
-        const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
-        const client = new issuer.Client();
-
-        nock('https://op.example.com')
-          .get('/me')
-          .reply(401, {
-            error: 'invalid_token',
-            error_description: 'bad things are happening',
-          });
-
-        return client.userinfo()
-          .then(fail, function (error) {
-            expect(error.name).to.equal('OpenIdConnectError');
-            expect(error).to.have.property('error', 'invalid_token');
-            expect(error).to.have.property('error_description', 'bad things are happening');
-          });
-      });
-
-      it('is rejected with OpenIdConnectError upon oidc error in www-authenticate header', function () {
-        const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
-        const client = new issuer.Client();
-
-        nock('https://op.example.com')
-          .get('/me')
-          .reply(401, 'Unauthorized', {
-            'WWW-Authenticate': 'Bearer error="invalid_token", error_description="bad things are happening"',
-          });
-
-        return client.userinfo()
-          .then(fail, function (error) {
-            expect(error.name).to.equal('OpenIdConnectError');
-            expect(error).to.have.property('error', 'invalid_token');
-            expect(error).to.have.property('error_description', 'bad things are happening');
-          });
-      });
-
-      it('is rejected with when non 200 is returned', function () {
-        const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
-        const client = new issuer.Client();
-
-        nock('https://op.example.com')
-          .get('/me')
-          .reply(500, 'Internal Server Error');
-
-        return client.userinfo()
-          .then(fail, function (error) {
-            expect(error).to.be.an.instanceof(issuer.httpClient.HTTPError);
-          });
-      });
-
-      it('is rejected with JSON.parse error upon invalid response', function () {
-        const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
-        const client = new issuer.Client();
-
-        nock('https://op.example.com')
-          .get('/me')
-          .reply(200, '{"notavalid"}');
-
-        return client.userinfo()
-          .then(fail, function (error) {
-            expect(error).to.be.an.instanceof(SyntaxError);
-            expect(error).to.have.property('message').matches(/Unexpected token/);
-          });
-      });
-
-      describe('signed response (content-type = application/jwt)', function () {
-        it('decodes and validates the id_token', function () {
-          const issuer = new Issuer({
-            userinfo_endpoint: 'https://op.example.com/me',
-            issuer: 'https://op.example.com',
-          });
-          const client = new issuer.Client({
-            client_id: 'foobar',
-            userinfo_signed_response_alg: 'none',
-          });
-
-          const payload = {
-            iss: issuer.issuer,
-            sub: 'foobar',
-            aud: client.client_id,
-            exp: now() + 100,
-            iat: now(),
-          };
-
+      describe('browser env behaviour with forceTokenExchange=true', () => {
+        it('does an authorization_code grant with code and redirect_uri', function () {
           nock('https://op.example.com')
-            .get('/me')
-            .reply(200, `${encode({ alg: 'none' })}.${encode(payload)}.`, {
-              'content-type': 'application/jwt; charset=utf-8',
-            });
-
-          return client.userinfo('accessToken')
-            .then((userinfo) => {
-              expect(userinfo).to.be.an('object');
-              expect(userinfo).to.eql(payload);
-            });
-        });
-
-        it('validates the used alg of signed userinfo', function () {
-          const issuer = new Issuer({
-            userinfo_endpoint: 'https://op.example.com/me',
-            issuer: 'https://op.example.com',
-          });
-          const client = new issuer.Client({
-            client_id: 'foobar',
-            userinfo_signed_response_alg: 'RS256',
-          });
-
-          const payload = {};
-
-          nock('https://op.example.com')
-            .get('/me')
-            .reply(200, `${encode({ alg: 'none' })}.${encode(payload)}.`, {
-              'content-type': 'application/jwt; charset=utf-8',
-            });
-
-          return client.userinfo().then(fail, (err) => {
-            expect(err.message).to.eql('unexpected algorithm received');
-          });
-        });
-      });
-    });
-
-    _.forEach({
-      introspect: 'introspection_endpoint',
-      revoke: 'revocation_endpoint',
-    }, function (endpoint, method) {
-      describe(`#${method}`, function () {
-        it('posts the token in a body and returns the parsed response', function () {
-          nock('https://rp.example.com')
             .filteringRequestBody(function (body) {
               expect(querystring.parse(body)).to.eql({
-                token: 'tokenValue',
+                code: 'codeValue',
+                redirect_uri: 'https://rp.example.com/cb',
+                grant_type: 'authorization_code',
+                code_verifier: 'foo',
               });
             })
-            .post(`/token/${method}`)
-            .reply(200, {
-              endpoint: 'response',
-            });
+            .post('/token')
+            .reply(200, {});
 
-          const issuer = new Issuer({
-            [endpoint]: `https://rp.example.com/token/${method}`,
-          });
-          const client = new issuer.Client();
-
-          return client[method]('tokenValue')
-            .then(response => expect(response).to.eql({ endpoint: 'response' }));
-        });
-
-        it('posts the token and a hint in a body', function () {
-          nock('https://rp.example.com')
-            .filteringRequestBody(function (body) {
-              expect(querystring.parse(body)).to.eql({
-                token: 'tokenValue',
-                token_type_hint: 'access_token',
-              });
-            })
-            .post(`/token/${method}`)
-            .reply(200, {
-              endpoint: 'response',
-            });
-
-          const issuer = new Issuer({
-            [endpoint]: `https://rp.example.com/token/${method}`,
-          });
-          const client = new issuer.Client();
-
-          return client[method]('tokenValue', 'access_token');
-        });
-
-        it('validates the hint is a string', function () {
-          const issuer = new Issuer({
-            [endpoint]: `https://rp.example.com/token/${method}`,
-          });
-          const client = new issuer.Client();
-          expect(function () {
-            client[method]('tokenValue', { nonstring: 'value' });
-          }).to.throw('hint must be a string');
-        });
-
-        it('is rejected with OpenIdConnectError upon oidc error', function () {
-          nock('https://rp.example.com')
-            .post(`/token/${method}`)
-            .reply(500, {
-              error: 'server_error',
-              error_description: 'bad things are happening',
-            });
-
-          const issuer = new Issuer({
-            [endpoint]: `https://rp.example.com/token/${method}`,
-          });
-          const client = new issuer.Client();
-
-          return client[method]('tokenValue')
-            .then(fail, function (error) {
-              expect(error).to.have.property('error', 'server_error');
-              expect(error).to.have.property('error_description', 'bad things are happening');
+          return this.client.authorizationCallback('https://rp.example.com/cb', {
+            code: 'codeValue',
+          }, { code_verifier: 'foo' }, { forceTokenExchange: true })
+            .then(fail, () => {
+              expect(nock.isDone()).to.be.true;
             });
         });
+      });
+    }
 
-        it('is rejected with when non 200 is returned', function () {
-          nock('https://rp.example.com')
-            .post(`/token/${method}`)
-            .reply(500, 'Internal Server Error');
-
-          const issuer = new Issuer({
-            [endpoint]: `https://rp.example.com/token/${method}`,
-          });
-          const client = new issuer.Client();
-
-          return client[method]('tokenValue')
-            .then(fail, function (error) {
-              expect(error).to.be.an.instanceof(issuer.httpClient.HTTPError);
-            });
-        });
-
-        it('is rejected with JSON.parse error upon invalid response', function () {
-          nock('https://rp.example.com')
-            .post(`/token/${method}`)
-            .reply(200, '{"notavalid"}');
-
-          const issuer = new Issuer({
-            [endpoint]: `https://rp.example.com/token/${method}`,
-          });
-          const client = new issuer.Client();
-
-          return client[method]('tokenValue')
-            .then(fail, function (error) {
-              expect(error).to.be.an.instanceof(SyntaxError);
-              expect(error).to.have.property('message').matches(/Unexpected token/);
-            });
-        });
-
-        if (method === 'revoke') {
-          it('handles empty bodies', function () {
-            nock('https://rp.example.com')
-              .post(`/token/${method}`)
-              .reply(200);
-
-            const issuer = new Issuer({
-              [endpoint]: `https://rp.example.com/token/${method}`,
-            });
-            const client = new issuer.Client();
-
-            return client[method]('tokenValue').then((response) => {
-              expect(response).to.eql({});
-            });
-          });
-        }
+    it('handles implicit responses too', function () {
+      return this.client.oauthCallback(undefined, {
+        access_token: 'tokenValue',
+      }).then((set) => {
+        expect(set).to.be.instanceof(TokenSet);
+        expect(set).to.have.property('access_token', 'tokenValue');
       });
     });
 
-    describe('#grant', function () {
-      it('calls authenticatedPost with token endpoint and body', function () {
-        const issuer = new Issuer({ token_endpoint: 'https://op.example.com/token' });
-        const client = new issuer.Client();
+    describe('response type checks', function () {
+      it('rejects with an Error when code is missing', function () {
+        return this.client.oauthCallback('https://rp.example.com/cb', {
+          // code: 'foo',
+          access_token: 'foo',
+          token_type: 'Bearer',
+        }, {
+          response_type: 'code token',
+        }).then(fail, (error) => {
+          expect(error).to.be.instanceof(Error);
+          expect(error).to.have.property('message', 'code missing from response');
+        });
+      });
 
-        sinon.spy(client, 'authenticatedPost');
+      it('rejects with an Error when token_type is missing', function () {
+        return this.client.oauthCallback('https://rp.example.com/cb', {
+          code: 'foo',
+          access_token: 'foo',
+          // token_type: 'Bearer',
+        }, {
+          response_type: 'code token',
+        }).then(fail, (error) => {
+          expect(error).to.be.instanceof(Error);
+          expect(error).to.have.property('message', 'token_type missing from response');
+        });
+      });
 
-        client.grant({
-          token: 'tokenValue',
-        }).then(noop, noop);
+      it('rejects with an Error when access_token is missing', function () {
+        return this.client.oauthCallback('https://rp.example.com/cb', {
+          code: 'foo',
+          // access_token: 'foo',
+          token_type: 'Bearer',
+        }, {
+          response_type: 'code token',
+        }).then(fail, (error) => {
+          expect(error).to.be.instanceof(Error);
+          expect(error).to.have.property('message', 'access_token missing from response');
+        });
+      });
 
-        expect(client.authenticatedPost.args[0][0]).to.equal('token');
-        expect(client.authenticatedPost.args[0][1]).to.eql({ body: { token: 'tokenValue' } });
+      ['code', 'access_token'].forEach((param) => {
+        it(`rejects with an Error when ${param} is encoutered during "none" response`, function () {
+          return this.client.oauthCallback('https://rp.example.com/cb', {
+            [param]: 'foo',
+          }, {
+            response_type: 'none',
+          }).then(fail, (error) => {
+            expect(error).to.be.instanceof(Error);
+            expect(error).to.have.property('message', 'unexpected params encountered for "none" response');
+          });
+        });
       });
     });
 
-    describe('#authFor', function () {
-      context('when none', function () {
-        it('returns the body httpOptions', function () {
-          const issuer = new Issuer();
-          const client = new issuer.Client({
-            client_id: 'identifier',
-            client_secret: 'secure',
-            token_endpoint_auth_method: 'none',
-          });
-          expect(client.authFor('token')).to.eql({
-            body: { client_id: 'identifier' },
-          });
+    it('rejects with OpenIdConnectError when part of the response', function () {
+      return this.client.oauthCallback('https://rp.example.com/cb', {
+        error: 'invalid_request',
+      }).then(fail, (error) => {
+        expect(error).to.be.instanceof(OpenIdConnectError);
+        expect(error).to.have.property('error', 'invalid_request');
+      });
+    });
+
+    describe('state checks', function () {
+      it('rejects with an Error when states mismatch (returned)', function () {
+        return this.client.oauthCallback('https://rp.example.com/cb', {
+          state: 'should be checked for this',
+        }).then(fail, (error) => {
+          expect(error).to.be.instanceof(Error);
+          expect(error).to.have.property('message', 'checks.state argument is missing');
         });
       });
 
-      context('when client_secret_post', function () {
-        it('returns the body httpOptions', function () {
-          const issuer = new Issuer();
-          const client = new issuer.Client({
-            client_id: 'identifier',
-            client_secret: 'secure',
-            token_endpoint_auth_method: 'client_secret_post',
+      it('rejects with an Error when states mismatch (not returned)', function () {
+        return this.client.oauthCallback('https://rp.example.com/cb', {}, {
+          state: 'should be this',
+        })
+          .then(fail, (error) => {
+            expect(error).to.be.instanceof(Error);
+            expect(error).to.have.property('message', 'state missing from the response');
           });
-          expect(client.authFor('token')).to.eql({
-            body: { client_id: 'identifier', client_secret: 'secure' },
+      });
+
+      it('rejects with an Error when states mismatch (general mismatch)', function () {
+        return this.client.oauthCallback('https://rp.example.com/cb', {
+          state: 'is this',
+        }, {
+          state: 'should be this',
+        })
+          .then(fail, (error) => {
+            expect(error).to.be.instanceof(Error);
+            expect(error).to.have.property('message', 'state mismatch');
           });
+      });
+    });
+  });
+
+  describe('#refresh', function () {
+    before(function () {
+      const issuer = new Issuer({
+        token_endpoint: 'https://op.example.com/token',
+      });
+      this.client = new issuer.Client({
+        client_id: 'identifier',
+        client_secret: 'secure',
+      });
+    });
+
+    it('does an refresh_token grant with refresh_token', function () {
+      nock('https://op.example.com')
+        .filteringRequestBody(function (body) {
+          expect(querystring.parse(body)).to.eql({
+            refresh_token: 'refreshValue',
+            grant_type: 'refresh_token',
+          });
+        })
+        .post('/token')
+        .reply(200, {});
+
+      return this.client.refresh('refreshValue').then(() => {
+        expect(nock.isDone()).to.be.true;
+      });
+    });
+
+    it('returns a TokenSet', function () {
+      nock('https://op.example.com')
+        .post('/token')
+        .reply(200, {
+          access_token: 'tokenValue',
+        });
+
+      return this.client.refresh('refreshValue', {})
+        .then((set) => {
+          expect(set).to.be.instanceof(TokenSet);
+          expect(set).to.have.property('access_token', 'tokenValue');
+        });
+    });
+
+    it('can take a TokenSet', function () {
+      nock('https://op.example.com')
+        .filteringRequestBody(function (body) {
+          expect(querystring.parse(body)).to.eql({
+            refresh_token: 'refreshValue',
+            grant_type: 'refresh_token',
+          });
+        })
+        .post('/token')
+        .reply(200, {});
+
+      return this.client.refresh(new TokenSet({
+        access_token: 'present',
+        refresh_token: 'refreshValue',
+      }))
+        .then(() => {
+          expect(nock.isDone()).to.be.true;
+        });
+    });
+
+    it('rejects when passed a TokenSet not containing refresh_token', function () {
+      return this.client.refresh(new TokenSet({
+        access_token: 'present',
+        // refresh_token: not
+      }))
+        .then(fail, (error) => {
+          expect(error).to.be.instanceof(Error);
+          expect(error).to.have.property('message', 'refresh_token not present in TokenSet');
+        });
+    });
+  });
+
+  it('#joseSecret', function () {
+    const issuer = new Issuer();
+    const client = new issuer.Client({ client_secret: 'rj_JR' });
+
+    return client.joseSecret()
+      .then((key) => {
+        expect(key).to.have.property('kty', 'oct');
+        return client.joseSecret().then((cached) => {
+          expect(key).to.equal(cached);
+        });
+      });
+  });
+
+  it('#derivedKey', function () {
+    const issuer = new Issuer();
+    const client = new issuer.Client({ client_secret: 'rj_JR' });
+
+    return client.derivedKey('128')
+      .then((key) => {
+        expect(key).to.have.property('kty', 'oct');
+        return client.derivedKey('128').then((cached) => {
+          expect(key).to.equal(cached);
+        });
+      });
+  });
+
+  it('#inspect', function () {
+    const issuer = new Issuer({ issuer: 'https://op.example.com' });
+    const client = new issuer.Client({ client_id: 'identifier' });
+    expect(client.inspect()).to.equal('Client <identifier>');
+  });
+
+  describe('#userinfo', function () {
+    it('takes a string token', function () {
+      const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
+      const client = new issuer.Client();
+
+      nock('https://op.example.com')
+        .get('/me').reply(200, {});
+
+      return client.userinfo('tokenValue').then(() => {
+        expect(nock.isDone()).to.be.true;
+      });
+    });
+
+    it('takes a tokenset', function () {
+      const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
+      const client = new issuer.Client({
+        id_token_signed_response_alg: 'none',
+      });
+
+      nock('https://op.example.com')
+        .get('/me').reply(200, {
+          sub: 'subject',
+        });
+
+      return client.userinfo(new TokenSet({
+        id_token: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJzdWJqZWN0In0.',
+        refresh_token: 'bar',
+        access_token: 'tokenValue',
+      })).then(() => {
+        expect(nock.isDone()).to.be.true;
+      });
+    });
+
+    it('takes a tokenset and validates the subject in id_token is the same in userinfo', function () {
+      const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
+      const client = new issuer.Client({
+        id_token_signed_response_alg: 'none',
+      });
+
+      nock('https://op.example.com')
+        .get('/me').reply(200, {
+          sub: 'different-subject',
+        });
+
+      return client.userinfo(new TokenSet({
+        id_token: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJzdWJqZWN0In0.',
+        refresh_token: 'bar',
+        access_token: 'tokenValue',
+      })).then(fail, (err) => {
+        expect(nock.isDone()).to.be.true;
+        expect(err.message).to.equal('userinfo sub mismatch');
+      });
+    });
+
+    it('validates an access token is present in the tokenset', function () {
+      const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
+      const client = new issuer.Client();
+
+      return client.userinfo(new TokenSet({
+        id_token: 'foo',
+        refresh_token: 'bar',
+      })).then(fail, (error) => {
+        expect(error.message).to.equal('access_token not present in TokenSet');
+      });
+    });
+
+    it('can do a post call', function () {
+      const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
+      const client = new issuer.Client();
+
+      nock('https://op.example.com')
+        .post('/me').reply(200, {});
+
+      return client.userinfo('tokenValue', { verb: 'POST' }).then(() => {
+        expect(nock.isDone()).to.be.true;
+      });
+    });
+
+    it('can submit access token in a body when post', function () {
+      const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
+      const client = new issuer.Client();
+
+      nock('https://op.example.com')
+        .filteringRequestBody(function (body) {
+          expect(querystring.parse(body)).to.eql({
+            access_token: 'tokenValue',
+          });
+        })
+        .post('/me').reply(200, {});
+
+      return client.userinfo('tokenValue', { verb: 'POST', via: 'body' }).then(() => {
+        expect(nock.isDone()).to.be.true;
+      });
+    });
+
+    it('can add extra params in a body when post', function () {
+      const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
+      const client = new issuer.Client();
+
+      nock('https://op.example.com')
+        .filteringRequestBody(function (body) {
+          expect(querystring.parse(body)).to.eql({
+            access_token: 'tokenValue',
+            foo: 'bar',
+          });
+        })
+        .post('/me').reply(200, {});
+
+      return client.userinfo('tokenValue', {
+        verb: 'POST',
+        via: 'body',
+        params: { foo: 'bar' },
+      }).then(() => {
+        expect(nock.isDone()).to.be.true;
+      });
+    });
+
+    it('can add extra params in a query when non-post', function () {
+      const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
+      const client = new issuer.Client();
+
+      nock('https://op.example.com')
+        .get('/me?foo=bar')
+        .reply(200, {});
+
+      return client.userinfo('tokenValue', {
+        params: { foo: 'bar' },
+      }).then(() => {
+        expect(nock.isDone()).to.be.true;
+      });
+    });
+
+    it('can only submit access token in a body when post', function () {
+      const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
+      const client = new issuer.Client();
+
+      return client.userinfo('tokenValue', { via: 'body', verb: 'get' }).then(fail, ({ message }) => {
+        expect(message).to.eql('can only send body on POST');
+      });
+    });
+
+    it('can submit access token in a query when get', function () {
+      const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
+      const client = new issuer.Client();
+
+      nock('https://op.example.com')
+        .get('/me?access_token=tokenValue')
+        .reply(200, {});
+
+      return client.userinfo('tokenValue', { via: 'query' }).then(() => {
+        expect(nock.isDone()).to.be.true;
+      });
+    });
+
+    it('can only submit access token in a query when get', function () {
+      const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
+      const client = new issuer.Client();
+
+      return client.userinfo('tokenValue', { via: 'query', verb: 'post' }).then(fail, ({ message }) => {
+        expect(message).to.eql('providers should only parse query strings for GET requests');
+      });
+    });
+
+    it('is rejected with OpenIdConnectError upon oidc error', function () {
+      const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
+      const client = new issuer.Client();
+
+      nock('https://op.example.com')
+        .get('/me')
+        .reply(401, {
+          error: 'invalid_token',
+          error_description: 'bad things are happening',
+        });
+
+      return client.userinfo()
+        .then(fail, function (error) {
+          expect(error.name).to.equal('OpenIdConnectError');
+          expect(error).to.have.property('error', 'invalid_token');
+          expect(error).to.have.property('error_description', 'bad things are happening');
+        });
+    });
+
+    it('is rejected with OpenIdConnectError upon oidc error in www-authenticate header', function () {
+      const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
+      const client = new issuer.Client();
+
+      nock('https://op.example.com')
+        .get('/me')
+        .reply(401, 'Unauthorized', {
+          'WWW-Authenticate': 'Bearer error="invalid_token", error_description="bad things are happening"',
+        });
+
+      return client.userinfo()
+        .then(fail, function (error) {
+          expect(error.name).to.equal('OpenIdConnectError');
+          expect(error).to.have.property('error', 'invalid_token');
+          expect(error).to.have.property('error_description', 'bad things are happening');
+        });
+    });
+
+    it('is rejected with when non 200 is returned', function () {
+      const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
+      const client = new issuer.Client();
+
+      nock('https://op.example.com')
+        .get('/me')
+        .reply(500, 'Internal Server Error');
+
+      return client.userinfo()
+        .then(fail, function (error) {
+          expect(error).to.be.an.instanceof(issuer.httpClient.HTTPError);
+        });
+    });
+
+    it('is rejected with JSON.parse error upon invalid response', function () {
+      const issuer = new Issuer({ userinfo_endpoint: 'https://op.example.com/me' });
+      const client = new issuer.Client();
+
+      nock('https://op.example.com')
+        .get('/me')
+        .reply(200, '{"notavalid"}');
+
+      return client.userinfo()
+        .then(fail, function (error) {
+          expect(error).to.be.an.instanceof(SyntaxError);
+          expect(error).to.have.property('message').matches(/Unexpected token/);
+        });
+    });
+
+    describe('signed response (content-type = application/jwt)', function () {
+      it('decodes and validates the id_token', function () {
+        const issuer = new Issuer({
+          userinfo_endpoint: 'https://op.example.com/me',
+          issuer: 'https://op.example.com',
+        });
+        const client = new issuer.Client({
+          client_id: 'foobar',
+          userinfo_signed_response_alg: 'none',
+        });
+
+        const payload = {
+          iss: issuer.issuer,
+          sub: 'foobar',
+          aud: client.client_id,
+          exp: now() + 100,
+          iat: now(),
+        };
+
+        nock('https://op.example.com')
+          .get('/me')
+          .reply(200, `${encode({ alg: 'none' })}.${encode(payload)}.`, {
+            'content-type': 'application/jwt; charset=utf-8',
+          });
+
+        return client.userinfo('accessToken')
+          .then((userinfo) => {
+            expect(userinfo).to.be.an('object');
+            expect(userinfo).to.eql(payload);
+          });
+      });
+
+      it('validates the used alg of signed userinfo', function () {
+        const issuer = new Issuer({
+          userinfo_endpoint: 'https://op.example.com/me',
+          issuer: 'https://op.example.com',
+        });
+        const client = new issuer.Client({
+          client_id: 'foobar',
+          userinfo_signed_response_alg: 'RS256',
+        });
+
+        const payload = {};
+
+        nock('https://op.example.com')
+          .get('/me')
+          .reply(200, `${encode({ alg: 'none' })}.${encode(payload)}.`, {
+            'content-type': 'application/jwt; charset=utf-8',
+          });
+
+        return client.userinfo().then(fail, (err) => {
+          expect(err.message).to.eql('unexpected algorithm received');
+        });
+      });
+    });
+  });
+
+  describe('#introspect', function () {
+    it('posts the token in a body and returns the parsed response', function () {
+      nock('https://rp.example.com')
+        .filteringRequestBody(function (body) {
+          expect(querystring.parse(body)).to.eql({
+            token: 'tokenValue',
+          });
+        })
+        .post('/token/introspect')
+        .reply(200, {
+          endpoint: 'response',
+        });
+
+      const issuer = new Issuer({
+        introspection_endpoint: 'https://rp.example.com/token/introspect',
+      });
+      const client = new issuer.Client();
+
+      return client.introspect('tokenValue')
+        .then(response => expect(response).to.eql({ endpoint: 'response' }));
+    });
+
+    it('posts the token and a hint in a body', function () {
+      nock('https://rp.example.com')
+        .filteringRequestBody(function (body) {
+          expect(querystring.parse(body)).to.eql({
+            token: 'tokenValue',
+            token_type_hint: 'access_token',
+          });
+        })
+        .post('/token/introspect')
+        .reply(200, {
+          endpoint: 'response',
+        });
+
+      const issuer = new Issuer({
+        introspection_endpoint: 'https://rp.example.com/token/introspect',
+      });
+      const client = new issuer.Client();
+
+      return client.introspect('tokenValue', 'access_token');
+    });
+
+    it('validates the hint is a string', function () {
+      const issuer = new Issuer({
+        introspection_endpoint: 'https://rp.example.com/token/introspect',
+      });
+      const client = new issuer.Client();
+      return client.introspect('tokenValue', { nonstring: 'value' }).then(fail, ({ message }) => {
+        expect(message).to.eql('hint must be a string');
+      });
+    });
+
+    it('is rejected with OpenIdConnectError upon oidc error', function () {
+      nock('https://rp.example.com')
+        .post('/token/introspect')
+        .reply(500, {
+          error: 'server_error',
+          error_description: 'bad things are happening',
+        });
+
+      const issuer = new Issuer({
+        introspection_endpoint: 'https://rp.example.com/token/introspect',
+      });
+      const client = new issuer.Client();
+
+      return client.introspect('tokenValue')
+        .then(fail, function (error) {
+          expect(error).to.have.property('error', 'server_error');
+          expect(error).to.have.property('error_description', 'bad things are happening');
+        });
+    });
+
+    it('is rejected with when non 200 is returned', function () {
+      nock('https://rp.example.com')
+        .post('/token/introspect')
+        .reply(500, 'Internal Server Error');
+
+      const issuer = new Issuer({
+        introspection_endpoint: 'https://rp.example.com/token/introspect',
+      });
+      const client = new issuer.Client();
+
+      return client.introspect('tokenValue')
+        .then(fail, function (error) {
+          expect(error).to.be.an.instanceof(issuer.httpClient.HTTPError);
+        });
+    });
+
+    it('is rejected with JSON.parse error upon invalid response', function () {
+      nock('https://rp.example.com')
+        .post('/token/introspect')
+        .reply(200, '{"notavalid"}');
+
+      const issuer = new Issuer({
+        introspection_endpoint: 'https://rp.example.com/token/introspect',
+      });
+      const client = new issuer.Client();
+
+      return client.introspect('tokenValue')
+        .then(fail, function (error) {
+          expect(error).to.be.an.instanceof(SyntaxError);
+          expect(error).to.have.property('message').matches(/Unexpected token/);
+        });
+    });
+  });
+
+  describe('#revoke', function () {
+    it('posts the token in a body and returns undefined', function () {
+      nock('https://rp.example.com')
+        .filteringRequestBody(function (body) {
+          expect(querystring.parse(body)).to.eql({
+            token: 'tokenValue',
+          });
+        })
+        .post('/token/revoke')
+        .reply(200, {
+          endpoint: 'response',
+        });
+
+      const issuer = new Issuer({
+        revocation_endpoint: 'https://rp.example.com/token/revoke',
+      });
+      const client = new issuer.Client();
+
+      return client.revoke('tokenValue')
+        .then(response => expect(response).to.be.undefined);
+    });
+
+    it('posts the token and a hint in a body', function () {
+      nock('https://rp.example.com')
+        .filteringRequestBody(function (body) {
+          expect(querystring.parse(body)).to.eql({
+            token: 'tokenValue',
+            token_type_hint: 'access_token',
+          });
+        })
+        .post('/token/revoke')
+        .reply(200, {
+          endpoint: 'response',
+        });
+
+      const issuer = new Issuer({
+        revocation_endpoint: 'https://rp.example.com/token/revoke',
+      });
+      const client = new issuer.Client();
+
+      return client.revoke('tokenValue', 'access_token');
+    });
+
+    it('validates the hint is a string', function () {
+      const issuer = new Issuer({
+        revocation_endpoint: 'https://rp.example.com/token/revoke',
+      });
+      const client = new issuer.Client();
+      return client.revoke('tokenValue', { nonstring: 'value' }).then(fail, ({ message }) => {
+        expect(message).to.eql('hint must be a string');
+      });
+    });
+
+    it('is rejected with OpenIdConnectError upon oidc error', function () {
+      nock('https://rp.example.com')
+        .post('/token/revoke')
+        .reply(500, {
+          error: 'server_error',
+          error_description: 'bad things are happening',
+        });
+
+      const issuer = new Issuer({
+        revocation_endpoint: 'https://rp.example.com/token/revoke',
+      });
+      const client = new issuer.Client();
+
+      return client.revoke('tokenValue')
+        .then(fail, function (error) {
+          expect(error).to.have.property('error', 'server_error');
+          expect(error).to.have.property('error_description', 'bad things are happening');
+        });
+    });
+
+    it('is rejected with when non 200 is returned', function () {
+      nock('https://rp.example.com')
+        .post('/token/revoke')
+        .reply(500, 'Internal Server Error');
+
+      const issuer = new Issuer({
+        revocation_endpoint: 'https://rp.example.com/token/revoke',
+      });
+      const client = new issuer.Client();
+
+      return client.revoke('tokenValue')
+        .then(fail, function (error) {
+          expect(error).to.be.an.instanceof(issuer.httpClient.HTTPError);
+        });
+    });
+
+    it('completely ignores the response, even invalid or html one', function () {
+      nock('https://rp.example.com')
+        .post('/token/revoke')
+        .reply(200, '{"notavalid"}');
+
+      const issuer = new Issuer({
+        revocation_endpoint: 'https://rp.example.com/token/revoke',
+      });
+      const client = new issuer.Client();
+
+      return client.revoke('tokenValue');
+    });
+
+    it('handles empty bodies', function () {
+      nock('https://rp.example.com')
+        .post('/token/revoke')
+        .reply(200);
+
+      const issuer = new Issuer({
+        revocation_endpoint: 'https://rp.example.com/token/revoke',
+      });
+      const client = new issuer.Client();
+
+      return client.revoke('tokenValue');
+    });
+  });
+
+  describe('#grant', function () {
+    it('calls authenticatedPost with token endpoint and body', function () {
+      const issuer = new Issuer({ token_endpoint: 'https://op.example.com/token' });
+      const client = new issuer.Client();
+
+      sinon.spy(client, 'authenticatedPost');
+
+      client.grant({
+        token: 'tokenValue',
+      }).then(noop, noop);
+
+      expect(client.authenticatedPost.args[0][0]).to.equal('token');
+      expect(client.authenticatedPost.args[0][1]).to.eql({ body: { token: 'tokenValue' } });
+    });
+  });
+
+  describe('#authFor', function () {
+    describe('when none', function () {
+      it('returns the body httpOptions', async function () {
+        const issuer = new Issuer();
+        const client = new issuer.Client({
+          client_id: 'identifier',
+          client_secret: 'secure',
+          token_endpoint_auth_method: 'none',
+        });
+        expect(await client.authFor('token')).to.eql({
+          body: { client_id: 'identifier' },
+        });
+      });
+    });
+
+    describe('when client_secret_post', function () {
+      it('returns the body httpOptions', async function () {
+        const issuer = new Issuer();
+        const client = new issuer.Client({
+          client_id: 'identifier',
+          client_secret: 'secure',
+          token_endpoint_auth_method: 'client_secret_post',
+        });
+        expect(await client.authFor('token')).to.eql({
+          body: { client_id: 'identifier', client_secret: 'secure' },
+        });
+      });
+    });
+
+    describe('when client_secret_basic', function () {
+      it('is the default', async function () {
+        const issuer = new Issuer();
+        const client = new issuer.Client({ client_id: 'identifier', client_secret: 'secure' });
+        expect(await client.authFor('token')).to.eql({
+          headers: { Authorization: 'Basic aWRlbnRpZmllcjpzZWN1cmU=' },
         });
       });
 
-      context('when client_secret_basic', function () {
-        it('is the default', function () {
-          const issuer = new Issuer();
-          const client = new issuer.Client({ client_id: 'identifier', client_secret: 'secure' });
-          expect(client.authFor('token')).to.eql({
-            headers: { Authorization: 'Basic aWRlbnRpZmllcjpzZWN1cmU=' },
-          });
-        });
-
-        it('works with non-text characters', function () {
-          const issuer = new Issuer();
-          const client = new issuer.Client({ client_id: 'an:identifier', client_secret: 'some secure & non-standard secret' });
-          expect(client.authFor('token')).to.eql({
-            headers: { Authorization: 'Basic YW4lM0FpZGVudGlmaWVyOnNvbWUrc2VjdXJlKyUyNitub24tc3RhbmRhcmQrc2VjcmV0' },
-          });
+      it('works with non-text characters', async function () {
+        const issuer = new Issuer();
+        const client = new issuer.Client({ client_id: 'an:identifier', client_secret: 'some secure & non-standard secret' });
+        expect(await client.authFor('token')).to.eql({
+          headers: { Authorization: 'Basic YW4lM0FpZGVudGlmaWVyOnNvbWUrc2VjdXJlKyUyNitub24tc3RhbmRhcmQrc2VjcmV0' },
         });
       });
+    });
 
-      context('when client_secret_jwt', function () {
-        before(function () {
-          const issuer = new Issuer({
-            token_endpoint: 'https://rp.example.com/token',
-            token_endpoint_auth_signing_alg_values_supported: ['HS256', 'HS384'],
-          });
+    describe('when client_secret_jwt', function () {
+      before(function () {
+        const issuer = new Issuer({
+          token_endpoint: 'https://rp.example.com/token',
+          token_endpoint_auth_signing_alg_values_supported: ['HS256', 'HS384'],
+        });
 
+        const client = new issuer.Client({
+          client_id: 'identifier',
+          client_secret: 'its gotta be a long secret and i mean at least 32 characters',
+          token_endpoint_auth_method: 'client_secret_jwt',
+        });
+
+        return client.authFor('token').then((auth) => { this.auth = auth; });
+      });
+
+      it('promises a body', function () {
+        expect(this.auth).to.have.property('body').and.is.an('object');
+        expect(this.auth.body).to.have.property(
+          'client_assertion_type',
+          'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+        );
+        expect(this.auth.body).to.have.property('client_assertion');
+      });
+
+      it('has a predefined payload properties', function () {
+        const payload = JSON.parse(base64url.decode(this.auth.body.client_assertion.split('.')[1]));
+        expect(payload).to.have.keys(['iat', 'exp', 'jti', 'iss', 'sub', 'aud']);
+
+        expect(payload.iss).to.equal(payload.sub).to.equal('identifier');
+        expect(payload.jti).to.be.a('string');
+        expect(payload.iat).to.be.a('number');
+        expect(payload.exp).to.be.a('number');
+        expect(payload.aud).to.equal('https://rp.example.com/token');
+      });
+
+      it('has the right header properties', function () {
+        const header = JSON.parse(base64url.decode(this.auth.body.client_assertion.split('.')[0]));
+        expect(header).to.have.keys([
+          'alg', 'typ',
+        ]);
+
+        expect(header.alg).to.equal('HS256');
+        expect(header.typ).to.equal('JWT');
+      });
+    });
+
+    describe('when private_key_jwt', function () {
+      before(function () {
+        const issuer = new Issuer({
+          token_endpoint: 'https://rp.example.com/token',
+          token_endpoint_auth_signing_alg_values_supported: ['ES256', 'ES384'],
+        });
+
+        const keystore = jose.JWK.createKeyStore();
+
+        return keystore.generate('EC', 'P-256').then(() => {
           const client = new issuer.Client({
             client_id: 'identifier',
-            client_secret: 'its gotta be a long secret and i mean at least 32 characters',
-            token_endpoint_auth_method: 'client_secret_jwt',
-          });
+            token_endpoint_auth_method: 'private_key_jwt',
+          }, keystore);
 
           return client.authFor('token').then((auth) => { this.auth = auth; });
         });
-
-        it('promises a body', function () {
-          expect(this.auth).to.have.property('body').and.is.an('object');
-          expect(this.auth.body).to.have.property(
-            'client_assertion_type',
-            'urn:ietf:params:oauth:client-assertion-type:jwt-bearer'
-          );
-          expect(this.auth.body).to.have.property('client_assertion');
-        });
-
-        it('has a predefined payload properties', function () {
-          const payload = JSON.parse(base64url.decode(this.auth.body.client_assertion.split('.')[1]));
-          expect(payload).to.have.keys(['iat', 'exp', 'jti', 'iss', 'sub', 'aud']);
-
-          expect(payload.iss).to.equal(payload.sub).to.equal('identifier');
-          expect(payload.jti).to.be.a('string');
-          expect(payload.iat).to.be.a('number');
-          expect(payload.exp).to.be.a('number');
-          expect(payload.aud).to.equal('https://rp.example.com/token');
-        });
-
-        it('has the right header properties', function () {
-          const header = JSON.parse(base64url.decode(this.auth.body.client_assertion.split('.')[0]));
-          expect(header).to.have.keys([
-            'alg', 'typ',
-          ]);
-
-          expect(header.alg).to.equal('HS256');
-          expect(header.typ).to.equal('JWT');
-        });
       });
 
-      context('when private_key_jwt', function () {
-        before(function () {
-          const issuer = new Issuer({
-            token_endpoint: 'https://rp.example.com/token',
-            token_endpoint_auth_signing_alg_values_supported: ['ES256', 'ES384'],
-          });
+      it('promises a body', function () {
+        expect(this.auth).to.have.property('body').and.is.an('object');
+        expect(this.auth.body).to.have.property(
+          'client_assertion_type',
+          'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+        );
+        expect(this.auth.body).to.have.property('client_assertion');
+      });
 
-          const keystore = jose.JWK.createKeyStore();
+      it('has a predefined payload properties', function () {
+        const payload = JSON.parse(base64url.decode(this.auth.body.client_assertion.split('.')[1]));
+        expect(payload).to.have.keys(['iat', 'exp', 'jti', 'iss', 'sub', 'aud']);
 
-          return keystore.generate('EC', 'P-256').then(() => {
-            const client = new issuer.Client({
-              client_id: 'identifier',
-              token_endpoint_auth_method: 'private_key_jwt',
-            }, keystore);
+        expect(payload.iss).to.equal(payload.sub).to.equal('identifier');
+        expect(payload.jti).to.be.a('string');
+        expect(payload.iat).to.be.a('number');
+        expect(payload.exp).to.be.a('number');
+        expect(payload.aud).to.equal('https://rp.example.com/token');
+      });
 
-            return client.authFor('token').then((auth) => { this.auth = auth; });
-          });
-        });
+      it('has the right header properties', function () {
+        const header = JSON.parse(base64url.decode(this.auth.body.client_assertion.split('.')[0]));
+        expect(header).to.have.keys([
+          'alg', 'typ', 'kid',
+        ]);
 
-        it('promises a body', function () {
-          expect(this.auth).to.have.property('body').and.is.an('object');
-          expect(this.auth.body).to.have.property(
-            'client_assertion_type',
-            'urn:ietf:params:oauth:client-assertion-type:jwt-bearer'
-          );
-          expect(this.auth.body).to.have.property('client_assertion');
-        });
-
-        it('has a predefined payload properties', function () {
-          const payload = JSON.parse(base64url.decode(this.auth.body.client_assertion.split('.')[1]));
-          expect(payload).to.have.keys(['iat', 'exp', 'jti', 'iss', 'sub', 'aud']);
-
-          expect(payload.iss).to.equal(payload.sub).to.equal('identifier');
-          expect(payload.jti).to.be.a('string');
-          expect(payload.iat).to.be.a('number');
-          expect(payload.exp).to.be.a('number');
-          expect(payload.aud).to.equal('https://rp.example.com/token');
-        });
-
-        it('has the right header properties', function () {
-          const header = JSON.parse(base64url.decode(this.auth.body.client_assertion.split('.')[0]));
-          expect(header).to.have.keys([
-            'alg', 'typ', 'kid',
-          ]);
-
-          expect(header.alg).to.equal('ES256');
-          expect(header.typ).to.equal('JWT');
-          expect(header.kid).to.be.ok;
-        });
+        expect(header.alg).to.equal('ES256');
+        expect(header.typ).to.equal('JWT');
+        expect(header.kid).to.be.ok;
       });
     });
   });
@@ -1980,12 +2192,12 @@ const encode = object => base64url.encode(JSON.stringify(object));
     });
 
     it('fails if tokenset without id_token is passed in', function () {
-      expect(() => {
-        this.client.validateIdToken(new TokenSet({
-          access_token: 'tokenValue',
-          // id_token not
-        }));
-      }).to.throw('id_token not present in TokenSet');
+      return this.client.validateIdToken(new TokenSet({
+        access_token: 'tokenValue',
+        // id_token not
+      })).then(fail, ({ message }) => {
+        expect(message).to.eql('id_token not present in TokenSet');
+      });
     });
   });
 
@@ -2042,6 +2254,24 @@ const encode = object => base64url.encode(JSON.stringify(object));
 
           return issuer.keystore();
         });
+      });
+
+      it('just returns back if no claims passed', function () {
+        const userinfo = null;
+        return this.client.fetchDistributedClaims(userinfo)
+          .then((result) => {
+            expect(result).to.equal(userinfo);
+          });
+      });
+
+      it('just returns userinfo if no _claim_sources are found', function () {
+        const userinfo = {
+          sub: 'userID',
+        };
+        return this.client.fetchDistributedClaims(userinfo)
+          .then((result) => {
+            expect(result).to.equal(userinfo);
+          });
       });
 
       it('just returns userinfo if no distributed claims are to be fetched', function () {
@@ -2221,6 +2451,24 @@ const encode = object => base64url.encode(JSON.stringify(object));
         this.client = new issuer.Client({
           client_id: 'identifier',
         });
+      });
+
+      it('just returns back if no claims passed', function () {
+        const userinfo = null;
+        return this.client.unpackAggregatedClaims(userinfo)
+          .then((result) => {
+            expect(result).to.equal(userinfo);
+          });
+      });
+
+      it('just returns userinfo if no _claim_sources are found', function () {
+        const userinfo = {
+          sub: 'userID',
+        };
+        return this.client.unpackAggregatedClaims(userinfo)
+          .then((result) => {
+            expect(result).to.equal(userinfo);
+          });
       });
 
       it('just returns userinfo if no aggregated claims are to be unpacked', function () {
@@ -2503,82 +2751,111 @@ const encode = object => base64url.encode(JSON.stringify(object));
         this.client = new issuer.Client({ client_id: 'client_id' });
       });
 
-      before(function () {
-        this.origIncomingMessage = stdhttp.IncomingMessage;
-        stdhttp.IncomingMessage = MockRequest;
-      });
-
-      after(function () {
-        stdhttp.IncomingMessage = this.origIncomingMessage;
-      });
-
-      it('returns query params from full uri', function () {
-        expect(this.client.callbackParams('http://oidc-client.dev/cb?code=code')).to.eql({ code: 'code' });
-      });
-
-      it('returns query params from node request uri', function () {
-        expect(this.client.callbackParams('/cb?code=code')).to.eql({ code: 'code' });
-      });
-
-      it('works with IncomingMessage (GET + query)', function () {
-        const req = new MockRequest('GET', '/cb?code=code');
-        expect(this.client.callbackParams(req)).to.eql({ code: 'code' });
-      });
-
-      it('works with IncomingMessage (POST + pre-parsed string)', function () {
-        const req = new MockRequest('POST', '/cb', {
-          body: 'code=code',
+      describe('when passed a string', () => {
+        it('returns query params from full uri', function () {
+          expect(this.client.callbackParams('http://oidc-client.dev/cb?code=code')).to.eql({ code: 'code' });
         });
-        expect(this.client.callbackParams(req)).to.eql({ code: 'code' });
-      });
 
-      it('works with IncomingMessage (POST + pre-parsed object)', function () {
-        const req = new MockRequest('POST', '/cb', {
-          body: { code: 'code' },
+        it('returns query params from node request uri', function () {
+          expect(this.client.callbackParams('/cb?code=code')).to.eql({ code: 'code' });
         });
-        expect(this.client.callbackParams(req)).to.eql({ code: 'code' });
       });
 
-      it('works with IncomingMessage (POST + pre-parsed buffer)', function () {
-        const req = new MockRequest('POST', '/cb', {
-          body: Buffer.from('code=code'),
+      if (typeof window !== 'undefined') {
+        describe('when instance of window.Location', () => {
+          beforeEach(() => {
+            window.location.hash = '';
+            window.location.search = '';
+          });
+
+          it('handles search', function () {
+            window.location.search = '?code=code';
+            expect(this.client.callbackParams(window.location)).to.eql({ code: 'code' });
+          });
+
+          it('handles hash', function () {
+            window.location.hash = '#access_token=foo';
+            expect(this.client.callbackParams(window.location)).to.eql({ access_token: 'foo' });
+          });
+
+          it('handles search combined with hash', function () {
+            window.location.search = '?action=callback';
+            window.location.hash = '#access_token=foo';
+            expect(this.client.callbackParams(window.location)).to.eql({ access_token: 'foo' });
+          });
         });
-        expect(this.client.callbackParams(req)).to.eql({ code: 'code' });
-      });
+      }
 
-      it('rejects nonbody parsed POSTs', function () {
-        const req = new MockRequest('POST', '/cb');
-        expect(() => {
-          this.client.callbackParams(req);
-        }).to.throw('incoming message body missing, include a body parser prior to this call');
-      });
-
-      it('rejects non-object,buffer,string parsed bodies', function () {
-        const req = new MockRequest('POST', '/cb', { body: true });
-        expect(() => {
-          this.client.callbackParams(req);
-        }).to.throw('invalid IncomingMessage body object');
-      });
-
-      it('rejects IncomingMessage other than GET, POST', function () {
-        const req = new MockRequest('PUT', '/cb', {
-          body: { code: 'code' },
+      describe('when http.IncomingMessage', () => {
+        before(function () {
+          this.origIncomingMessage = stdhttp.IncomingMessage;
+          stdhttp.IncomingMessage = MockRequest;
         });
-        expect(() => {
-          this.client.callbackParams(req);
-        }).to.throw('invalid IncomingMessage method');
-      });
 
-      it('fails for other than strings or IncomingMessage', function () {
-        expect(() => {
-          this.client.callbackParams({});
-        }).to.throw('#callbackParams only accepts string urls, http.IncomingMessage or a lookalike');
-        expect(() => {
-          this.client.callbackParams(true);
-        }).to.throw('#callbackParams only accepts string urls, http.IncomingMessage or a lookalike');
-        expect(() => {
-          this.client.callbackParams([]);
-        }).to.throw('#callbackParams only accepts string urls, http.IncomingMessage or a lookalike');
+        after(function () {
+          stdhttp.IncomingMessage = this.origIncomingMessage;
+        });
+
+        it('works with IncomingMessage (GET + query)', function () {
+          const req = new MockRequest('GET', '/cb?code=code');
+          expect(this.client.callbackParams(req)).to.eql({ code: 'code' });
+        });
+
+        it('works with IncomingMessage (POST + pre-parsed string)', function () {
+          const req = new MockRequest('POST', '/cb', {
+            body: 'code=code',
+          });
+          expect(this.client.callbackParams(req)).to.eql({ code: 'code' });
+        });
+
+        it('works with IncomingMessage (POST + pre-parsed object)', function () {
+          const req = new MockRequest('POST', '/cb', {
+            body: { code: 'code' },
+          });
+          expect(this.client.callbackParams(req)).to.eql({ code: 'code' });
+        });
+
+        it('works with IncomingMessage (POST + pre-parsed buffer)', function () {
+          const req = new MockRequest('POST', '/cb', {
+            body: Buffer.from('code=code'),
+          });
+          expect(this.client.callbackParams(req)).to.eql({ code: 'code' });
+        });
+
+        it('rejects nonbody parsed POSTs', function () {
+          const req = new MockRequest('POST', '/cb');
+          expect(() => {
+            this.client.callbackParams(req);
+          }).to.throw('incoming message body missing, include a body parser prior to this call');
+        });
+
+        it('rejects non-object,buffer,string parsed bodies', function () {
+          const req = new MockRequest('POST', '/cb', { body: true });
+          expect(() => {
+            this.client.callbackParams(req);
+          }).to.throw('invalid IncomingMessage body object');
+        });
+
+        it('rejects IncomingMessage other than GET, POST', function () {
+          const req = new MockRequest('PUT', '/cb', {
+            body: { code: 'code' },
+          });
+          expect(() => {
+            this.client.callbackParams(req);
+          }).to.throw('invalid IncomingMessage method');
+        });
+
+        it('fails for other than strings or IncomingMessage', function () {
+          expect(() => {
+            this.client.callbackParams({});
+          }).to.throw('#callbackParams only accepts string urls, http.IncomingMessage or a lookalike');
+          expect(() => {
+            this.client.callbackParams(true);
+          }).to.throw('#callbackParams only accepts string urls, http.IncomingMessage or a lookalike');
+          expect(() => {
+            this.client.callbackParams([]);
+          }).to.throw('#callbackParams only accepts string urls, http.IncomingMessage or a lookalike');
+        });
       });
     });
 

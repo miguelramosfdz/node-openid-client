@@ -26,6 +26,6 @@ times.
 - Unless previously agreed upon (i.e. fixing a bug) all contributions must be backwards compatible
 - Follow [standard-version][standard-version] commit guidelines
 
-[coc]: https://github.com/panva/node-openid-client/blob/master/CODE_OF_CONDUCT.md
-[new-issue]: https://github.com/panva/node-openid-client/issues/new/choose
+[coc]: https://github.com/panva/openid-client/blob/master/CODE_OF_CONDUCT.md
+[new-issue]: https://github.com/panva/openid-client/issues/new/choose
 [standard-version]: https://github.com/conventional-changelog/standard-version
